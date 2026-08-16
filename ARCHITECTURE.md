@@ -45,6 +45,12 @@ HWT3100-TTL  ◄─────────────────────�
                                                          not free text)
 ```
 
+Not pictured above (to keep the diagram readable): the same 100ms loop
+driving the N2K senders also updates a `SKNotification` (2.8) —
+`notifications.navigation.headingMagnetic` — from `N2kHeadingSender`'s
+own staleness tracking. No RGB LED involvement anywhere in this
+firmware's own code (2.9) — SensESP already owns the board's one LED.
+
 Single ESP32-C3 firmware, no boot-mode routing (unlike the parent
 HALSER-default-firmware — no test-jig requirement, see SPEC §10 Design
 Decisions). One FreeRTOS task reads the HWT3100's ASCII text stream; the
@@ -235,6 +241,42 @@ Uses the same corrected `HeadingReading` as the N2K sender (2.4) — single
 source of truth, per SPEC §2. Raw magnetic field is not published here
 (SPEC §5.2, §10) — it's diagnostic-only, visible via 2.5.
 
+### 2.8 Fault Notification (`signalk_notification.h`, class `SKNotification`)
+
+Implements SPEC §6's stale-data fault indication — SignalK-notification
+only, no LED (2.9 explains why). SensESP 3.2.0 has no built-in
+"send a notification" helper (only `SKPrefixListener`, for *receiving*
+`notifications.*`), so `SKNotification` subclasses `sensesp::SKEmitter`
+directly — verified against the actual vendored source that this is the
+same generic extension point `sensesp::SKOutput<T>` itself uses:
+`SKDeltaQueue` unconditionally sweeps `SKEmitter::get_sources()` and
+calls `as_signalk_json()` on each, so any registered `SKEmitter`
+subclass is picked up without needing to hook into anything else.
+`as_signalk_json()` builds `{"path": ..., "value": {"state": ...,
+"message": ...}}`, publishing to
+`notifications.navigation.headingMagnetic` (nested under the related
+data path, per SignalK convention). `Set()` is called from the same
+100ms periodic loop that drives the N2K senders (2.6), reading
+`N2kHeadingSender::heading_.is_valid()` as the staleness signal — one
+`ExpiringValue` already tracking exactly this, reused rather than
+duplicated. Gated by the SignalK master enable flag: when SignalK output
+is disabled, the notification is held at `"normal"` regardless of actual
+staleness (SPEC §10).
+
+### 2.9 No Dedicated Fault LED
+
+`gateway.cpp` does not drive the RGB LED. SensESP auto-instantiates its
+own `RGBSystemStatusLed` on GPIO8 from the `PIN_RGB_LED` build flag
+(`sensesp_app.h`), writing WiFi/WebSocket connection-state colors
+unconditionally every 5ms via its own internal timer — with no exposed
+pause/override hook. This was already true before this component was
+added (a latent conflict from the gateway-wiring change, where
+`gateway.cpp` separately ran its own `Adafruit_NeoPixel` on the same
+physical pin); adding fault-indication color to that fight rather than
+resolving it wasn't an option. See §6 and SPEC §10 for the decision to
+drop the firmware's own LED use entirely rather than remove
+`PIN_RGB_LED` and lose SensESP's connection-status display.
+
 ## 3. Data Models
 
 See SPEC.md §3 for the conceptual model. In code:
@@ -281,7 +323,7 @@ Same as the parent firmware (see its AGENTS.md), plus one addition:
 | Serial parsing | Custom (this project) | Simple line-based ASCII parsing (`Magx=<n>,y=<n>,z=<n>,w=<n.n>\r\n`) — no library needed, comparable effort to the parent's NMEA 0183 sentence parsers but simpler (no checksum). |
 | Rate of turn | Custom (this project) | No library needed — a sliding-window derivative of heading readings is a small, self-contained computation (2.4a); no existing library targets "derive ROT from a compass with no gyroscope." |
 | Serial log transport | SensESP's existing config REST API (no new dependency) | SensESP's `HTTPServer` wraps ESP-IDF's native `esp_http_server`, not `ESPAsyncWebServer` as first assumed, and exposes no public hook for custom HTTP/WebSocket endpoints at all. Reusing the already-public config GET/PUT mechanism (§2.5) needed nothing new; a dedicated WebSocket endpoint would have needed a second, hand-rolled `esp_http_server` instance. |
-| RGB LED | Adafruit NeoPixel | Instantiated in `gateway.cpp`; fault indication (SPEC §6) itself is not yet implemented — see docs/plans/gateway-wiring.md. |
+| RGB LED | Not used by this firmware's own code | SensESP auto-instantiates its own `RGBSystemStatusLed` on GPIO8 (from the `PIN_RGB_LED` build flag) with no exposed pause/share hook. `gateway.cpp` briefly ran a second, conflicting `Adafruit_NeoPixel` driver on the same pin (from the gateway-wiring change); removed once the conflict was found (§2.9, SPEC §10). |
 
 ## 5. Integration Points
 
@@ -342,10 +384,10 @@ src/
   main.cpp                            — entry point, run_hwt3100_gateway()
   halser_const.h                       — pin assignments (reused from
                                         parent: GPIO2/3 UART, GPIO4/5 CAN,
-                                        GPIO8 LED, GPIO9 button) + N2K
-                                        device identity constants cloned
-                                        from the Precision-9 reference
-                                        (§1, §4)
+                                        GPIO9 button — no GPIO8 LED
+                                        constant, see §2.9) + N2K device
+                                        identity constants cloned from the
+                                        Precision-9 reference (§1, §4)
   hwt3100_types.h                       — HeadingReading, HWT3100Command
                                         (§3). No Arduino dependency —
                                         shared by every component below.
@@ -387,14 +429,14 @@ src/
                                         30-line ring buffer exposed via
                                         SensESP's config REST API, not a
                                         WebSocket (see §4 for why)
+  signalk_notification.h                  — SKNotification (2.8): custom
+                                        SKEmitter subclass for the
+                                        stale-data fault notification
+                                        (docs/plans/fault-indication.md)
   gateway.h/.cpp                          — SensESP app wiring: config
                                         items, sender instantiation, main
                                         event loop (equivalent to the
-                                        parent's nmea_gateway.h/.cpp).
-                                        Fault indication (LED/SignalK
-                                        notification, SPEC §6) is not yet
-                                        implemented — see
-                                        docs/plans/gateway-wiring.md.
+                                        parent's nmea_gateway.h/.cpp)
 test/
   test_hwt3100_parser/                    — Unity tests for
                                         ParseHWT3100Line(), run via the
@@ -451,3 +493,10 @@ bus (also optional/toggleable).
   firmware-wide constant change), exposing them as config values follows
   the same `PersistingObservableValue` pattern already used everywhere
   else in `gateway.cpp` — no architectural change needed, just wiring.
+- If a future need for LED fault indication becomes strong enough to
+  revisit (SPEC §10 accepted losing it as the cost of keeping SensESP's
+  connection-status LED), the two real options are removing
+  `PIN_RGB_LED` to take back the pin entirely, or patching/forking
+  SensESP to add a pause hook to `BaseSystemStatusLed` — both are
+  bigger changes than this project's scope, not something to reach for
+  casually.

@@ -11,7 +11,10 @@ constexpr gpio_num_t kUART1TxPin = GPIO_NUM_2;
 constexpr gpio_num_t kUART1RxPin = GPIO_NUM_3;
 constexpr gpio_num_t kCANTxPin = GPIO_NUM_4;
 constexpr gpio_num_t kCANRxPin = GPIO_NUM_5;
-constexpr int kRGBLEDPin = 8;
+// GPIO8 (RGB LED) has no constant here: it's owned entirely by SensESP's
+// own RGBSystemStatusLed via the PIN_RGB_LED build flag in
+// platformio.ini, not touched directly by this firmware's own code —
+// see gateway.cpp and docs/plans/fault-indication.md.
 constexpr int kButtonPin = 9;
 
 // HWT3100-TTL/232 default baud rate (ARCHITECTURE.md §5, SPEC.md §1.2).

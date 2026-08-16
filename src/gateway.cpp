@@ -1,6 +1,5 @@
 #include "gateway.h"
 
-#include <Adafruit_NeoPixel.h>
 #include <N2kMessages.h>
 #include <NMEA2000_esp32.h>
 #include <esp_mac.h>
@@ -19,13 +18,13 @@
 #include "sensesp/ui/config_item.h"
 #include "sensesp_app_builder.h"
 #include "serial_terminal.h"
+#include "signalk_notification.h"
 
 using namespace sensesp;
 
 namespace {
 
 tNMEA2000* nmea2000 = nullptr;
-Adafruit_NeoPixel* led = nullptr;
 
 // Rate-of-turn sliding window (SPEC.md §11 flags these as reasonable
 // defaults needing real-hardware tuning, not values derived from an
@@ -70,11 +69,11 @@ void run_hwt3100_gateway() {
                           ->enable_ota("halser-hwt3100")
                           ->get_app();
 
-  // RGB LED. Fault indication (SPEC.md §6) is not implemented yet — see
-  // docs/plans/gateway-wiring.md; this is initialization only for now.
-  led = new Adafruit_NeoPixel(1, kRGBLEDPin, NEO_GRB + NEO_KHZ800);
-  led->begin();
-  led->setBrightness(30);
+  // No separate RGB LED use here — SensESP's own RGBSystemStatusLed
+  // (auto-instantiated from the PIN_RGB_LED build flag) already owns
+  // GPIO8 to show WiFi/WebSocket connection status, with no public hook
+  // to share or override it. Fault indication (SPEC.md §6) is
+  // SignalK-notification-only; see docs/plans/fault-indication.md.
 
   // --- Configuration (SPEC.md §7) ---
 
@@ -154,14 +153,30 @@ void run_hwt3100_gateway() {
 
   auto heading_sender = new halser::N2kHeadingSender(nmea2000);
   auto rate_of_turn_sender = new halser::N2kRateOfTurnSender(nmea2000);
-  event_loop()->onRepeat(100, [heading_sender, rate_of_turn_sender, n2k_enabled,
+
+  // Fault indication (SPEC.md §6): SignalK-notification-only, since the
+  // RGB LED is already claimed by SensESP (see above). "alarm" when the
+  // HWT3100 has gone stale, "normal" otherwise. Nested under the related
+  // data path per SignalK notification convention.
+  auto heading_fault_notification =
+      new halser::SKNotification("notifications.navigation.headingMagnetic");
+
+  event_loop()->onRepeat(100, [heading_sender, rate_of_turn_sender,
+                                heading_fault_notification, n2k_enabled,
                                 n2k_heading_pgn_enabled,
-                                n2k_rate_of_turn_pgn_enabled]() {
+                                n2k_rate_of_turn_pgn_enabled,
+                                signalk_enabled]() {
     if (n2k_enabled->get() && n2k_heading_pgn_enabled->get()) {
       heading_sender->send();
     }
     if (n2k_enabled->get() && n2k_rate_of_turn_pgn_enabled->get()) {
       rate_of_turn_sender->send();
+    }
+
+    if (signalk_enabled->get() && !heading_sender->heading_.is_valid()) {
+      heading_fault_notification->Set("alarm", "HWT3100 heading data is stale");
+    } else {
+      heading_fault_notification->Set("normal", "");
     }
   });
 

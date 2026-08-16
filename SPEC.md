@@ -241,10 +241,14 @@ value silently — see §6 (Fault Handling) for how staleness is surfaced.
 
 - **Stale sensor data**: if the HWT3100 stops producing readings within
   the expected interval, the firmware actively signals a fault rather
-  than going silent — via RGB LED status color and a SignalK notification
-  at minimum, and by transmitting N2K "not available" values on PGN
-  127250 rather than omitting it (resolved design decision, §10 — the
-  parent firmware's existing `ExpiringValue` pattern already does this).
+  than going silent — via a SignalK notification
+  (`notifications.navigation.headingMagnetic`, state `"alarm"`) and by
+  transmitting N2K "not available" values on PGN 127250/127251 rather
+  than omitting them (`ExpiringValue`, §10). **No dedicated RGB LED
+  fault color** — an earlier draft of this section required one, but
+  implementation found the LED is already fully claimed by SensESP's own
+  connection-status display with no way to share it; see §10 for the
+  design decision.
 - **Persistence**: the calibration offset (heading) and WiFi/N2K
   enable-disable configuration must survive a restart. Live sensor
   readings are ephemeral and are not persisted.
@@ -352,8 +356,8 @@ Requirements:
   §1.2, §5.1, §10), not a generic/custom device identity.
 - Transmit heading via SignalK deltas (`navigation.headingMagnetic`,
   SensESP/WiFi), independently toggleable.
-- Detect stale sensor data and actively indicate the fault (LED + SignalK
-  notification + N2K "not available" values, at minimum).
+- Detect stale sensor data and actively indicate the fault (SignalK
+  notification + N2K "not available" values — no LED, see §6, §10).
 - Live serial terminal in the web UI showing raw HWT3100 serial traffic
   (§8.1).
 - In-place calibration commands: named, allowlisted `AT+CALI` actions to
@@ -461,6 +465,26 @@ Requirements:
   responsiveness for a much more usable value on a helm/autopilot
   display. See ARCHITECTURE.md §2 for the window length and minimum
   sample-span chosen.
+- **No dedicated LED for fault indication; SensESP's connection-status
+  LED keeps sole ownership of GPIO8** — an earlier draft of §6 required
+  RGB LED fault indication. Implementation found `gateway.cpp` was
+  already (accidentally, from the gateway-wiring change) running its own
+  `Adafruit_NeoPixel` on the same physical LED SensESP's
+  `RGBSystemStatusLed` auto-claims via the `PIN_RGB_LED` build flag —
+  two independent drivers on one WS2812-style addressable LED, a real
+  timing/protocol conflict, not just a "who wins" question. Checked
+  SensESP's public API for a way to pause/share it; none exists.
+  Rejected running our own LED with `PIN_RGB_LED` removed (loses
+  SensESP's free WiFi/WebSocket status blinking, and this was a closer
+  call than it might sound — the user picked keeping SensESP's LED).
+  Fault indication is SignalK-notification-only as a result.
+- **The SignalK notification is a custom `SKEmitter` subclass, not a
+  SensESP helper** — SensESP 3.2.0 has no built-in "send a notification"
+  function (only `SKPrefixListener`, for *receiving* `notifications.*`).
+  Verified the underlying delta-sending mechanism is generic (any
+  registered `SKEmitter` gets swept and its `as_signalk_json()` called),
+  the same mechanism `SKOutput<T>` itself uses — so subclassing directly
+  is the supported extension point, not a workaround bolted onto one.
 
 ## 11. Open Questions
 
@@ -476,14 +500,11 @@ Requirements:
   say persistence is automatic. Needs confirming during implementation
   (e.g. by power-cycling the module after calibrating and checking
   whether the calibration held).
-- **Fault indication (RGB LED + SignalK notification) for stale sensor
-  data is not yet implemented** — §6/§9.1 describe it as an MVP
-  requirement, but gateway.cpp currently only initializes the LED
-  without driving it, and no SignalK notification is sent. The N2K side
-  of §6 is already covered (§10: `ExpiringValue::to_n2k()` sends
-  `N2kDoubleNA` when stale, as a side effect of reusing the parent's
-  pattern). Needs its own small design pass (LED color/pattern, SignalK
-  notification path/format) — see docs/plans/gateway-wiring.md.
+- The SignalK notification's JSON shape (`{path, value: {state,
+  message}}`) follows the documented SignalK notification schema, but
+  was never verified against a live SignalK server — no server was
+  available in this environment. Worth confirming a real server accepts
+  and displays it as expected before relying on it operationally.
 - The rate-of-turn sliding window length and minimum sample-span (chosen
   in ARCHITECTURE.md §2 as reasonable defaults, not derived from a real
   helm/autopilot's actual sensitivity requirements) may need tuning once
@@ -492,9 +513,12 @@ Requirements:
   hardware was available to tune this empirically during this pass.
 
 Resolved during implementation (see ARCHITECTURE.md and
-docs/plans/gateway-wiring.md for detail): N2K transmission rate for PGN
-127250 (100ms, matching the parent firmware's `N2kHeadingSender`
-interval); serial-log transport (SensESP's config REST API, not a
-WebSocket — SensESP 3.2.0 has no public extension point for custom HTTP
-endpoints at all); calibration-command UI mechanism (boolean
-config-toggle triggers, not dedicated buttons — same underlying reason).
+docs/plans/gateway-wiring.md, docs/plans/fault-indication.md for
+detail): N2K transmission rate for PGN 127250/127251 (100ms, matching
+the parent firmware's `N2kHeadingSender` interval); serial-log transport
+(SensESP's config REST API, not a WebSocket — SensESP 3.2.0 has no public
+extension point for custom HTTP endpoints at all); calibration-command UI
+mechanism (boolean config-toggle triggers, not dedicated buttons — same
+underlying reason); fault-indication mechanism (SignalK notification via
+a custom `SKEmitter` subclass, no LED — SensESP already owns the only
+RGB LED with no sharing hook).
