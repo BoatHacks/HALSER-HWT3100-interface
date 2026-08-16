@@ -1,0 +1,127 @@
+name: Cut Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 0.1.0 (no leading v) — must match VERSION and have a dated CHANGELOG.md entry'
+        required: true
+      ref:
+        description: 'Branch or commit to release from'
+        required: false
+        default: 'main'
+
+permissions:
+  contents: write
+  actions: read # needed to look up the CI workflow run for this commit
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.ref }}
+          fetch-depth: 0
+
+      - name: Verify VERSION matches input
+        run: |
+          FILE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [ "$FILE_VERSION" != "${{ github.event.inputs.version }}" ]; then
+            echo "::error::VERSION file ($FILE_VERSION) does not match requested version (${{ github.event.inputs.version }})"
+            exit 1
+          fi
+
+      - name: Ensure tag does not already exist
+        run: |
+          TAG="v${{ github.event.inputs.version }}"
+          if git ls-remote --tags origin | grep -q "refs/tags/${TAG}$"; then
+            echo "::error::Tag ${TAG} already exists"
+            exit 1
+          fi
+
+      - name: Extract CHANGELOG section for this version
+        id: changelog
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          START=$(grep -n "^## \[$VERSION\]" CHANGELOG.md | head -1 | cut -d: -f1)
+          if [ -z "$START" ]; then
+            echo "::error::No CHANGELOG.md entry found for version $VERSION"
+            exit 1
+          fi
+          REST=$(tail -n +$((START+1)) CHANGELOG.md)
+          END=$(printf '%s\n' "$REST" | grep -n "^## \[" | head -1 | cut -d: -f1)
+          if [ -z "$END" ]; then
+            NOTES="$REST"
+          else
+            NOTES=$(printf '%s\n' "$REST" | head -n $((END-1)))
+          fi
+          if [ -z "$NOTES" ]; then
+            echo "::error::No CHANGELOG.md entry found for version $VERSION"
+            exit 1
+          fi
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "$NOTES"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify CI succeeded for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          echo "Commit: $SHA"
+          CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=${SHA}&status=completed&per_page=1" --jq '.workflow_runs[0].conclusion // "none"')
+          echo "CI conclusion for this commit: $CONCLUSION"
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "::error::CI has not completed successfully for commit $SHA (conclusion: $CONCLUSION). Refusing to publish."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build firmware
+        run: pio run -e halser
+
+      - name: Run native unit tests
+        run: pio test -e native
+
+      - name: Build merged flashable firmware image
+        run: |
+          BUILD_DIR=.pio/build/halser
+          ASSET="halser-hwt3100-interface-${{ github.event.inputs.version }}-merged.bin"
+          echo "ASSET_PATH=$BUILD_DIR/$ASSET" >> "$GITHUB_ENV"
+          ESPTOOL="$(find ~/.platformio/packages/tool-esptoolpy -name esptool.py | head -1)"
+          python3 "$ESPTOOL" --chip esp32c3 merge_bin \
+            -o "$BUILD_DIR/$ASSET" \
+            --flash_mode qio --flash_freq 80m --flash_size 4MB \
+            0x0000 "$BUILD_DIR/bootloader.bin" \
+            0x8000 "$BUILD_DIR/partitions.bin" \
+            0x10000 "$BUILD_DIR/firmware.bin"
+
+      - name: Tag release
+        run: |
+          TAG="v${{ github.event.inputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ steps.changelog.outputs.notes }}
+        run: |
+          TAG="v${{ github.event.inputs.version }}"
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "$NOTES" \
+            "$ASSET_PATH"
