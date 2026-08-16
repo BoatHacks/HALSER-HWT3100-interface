@@ -1,6 +1,7 @@
 #ifndef HALSER_SRC_HWT3100_TYPES_H_
 #define HALSER_SRC_HWT3100_TYPES_H_
 
+#include <cstddef>
 #include <cstdint>
 
 // See ARCHITECTURE.md §3. No pitch/roll fields: the HWT3100-TTL/232 is a
@@ -20,6 +21,16 @@ enum class HWT3100Command {
   kStartCalibration,   // AT+CALI=1
   kEndCalibration,     // AT+CALI=0
   kClearCalibration,   // AT+CALI=2
+};
+
+// A raw line tapped from the HWT3100's serial output, for the live
+// serial terminal (SPEC.md §8.1). Fixed-size POD rather than
+// Arduino::String so it can cross the FreeRTOS task boundary via
+// TaskQueueProducer without heap allocation (see SafeQueue's own
+// documentation on why that matters for cross-task data).
+struct HWT3100RawLine {
+  static constexpr size_t kMaxLength = 128;
+  char text[kMaxLength] = {0};
 };
 
 #endif  // HALSER_SRC_HWT3100_TYPES_H_

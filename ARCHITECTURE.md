@@ -74,7 +74,13 @@ touches `Serial1` directly. Two directions, both gated:
   `TaskQueueProducer`, same mechanism as the parent's NMEA0183 pipeline.
   No binary framing/checksum — this is line-based ASCII text parsing,
   simpler than the parent firmware's NMEA 0183 sentence parsers. Also
-  taps every raw line to the serial terminal broadcaster (2.5).
+  taps every raw line to the serial terminal broadcaster (2.5). The two
+  `TaskQueueProducer` instances (one for `HeadingReading`, one for the
+  raw-line tap — a fixed-size `HWT3100RawLine` POD, not `Arduino::String`,
+  to keep the cross-task queue allocation-free) are constructed by, and
+  owned by, `gateway.cpp` (2.6) and passed into `HWT3100SerialIO` by
+  pointer — `HWT3100SerialIO` has no business knowing about the main
+  event loop needed to construct one.
 - **Write** (only from the calibration command handler, 2.2): exposes a
   single entry point, `SendCommand(HWT3100Command cmd)`, where
   `HWT3100Command` is a closed enum with exactly three values —
