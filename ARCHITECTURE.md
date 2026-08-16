@@ -53,20 +53,28 @@ deliberate and permanent (SPEC §9.3).
 
 ## 2. System Components
 
-### 2.1 HWT3100 Serial I/O (`hwt3100_serial.h/.cpp`)
+### 2.1 HWT3100 Serial I/O (`hwt3100_serial.h/.cpp`, plus `hwt3100_parser.h/.cpp`)
 
 Owns the UART1 (`Serial1`) handle exclusively — no other component ever
 touches `Serial1` directly. Two directions, both gated:
 
 - **Read** (continuous, dedicated FreeRTOS task, mirroring the parent
   firmware's `NMEA0183IOTask` pattern so reads aren't blocked by WiFi/N2K
-  work on the main loop): accumulates bytes until `\r\n`, then parses a
-  line of the form `Magx=<int>,y=<int>,z=<int>,w=<float>` into a
-  `HeadingReading` (§3). No binary framing/checksum — this is line-based
-  ASCII text parsing, simpler than the parent firmware's NMEA 0183
-  sentence parsers. Parsed readings are marshaled to the main loop via
+  work on the main loop): accumulates bytes until `\r\n`, then hands the
+  line to `ParseHWT3100Line()` — a pure function, in its own file
+  (`hwt3100_parser.h/.cpp`) with no Arduino dependency, that parses
+  `Magx=<int>,y=<int>,z=<int>,w=<float>` into a `HeadingReading` (§3) and
+  is unit-tested on the host (`pio test -e native`,
+  docs/plans/hwt3100-serial-parser.md) rather than only against real
+  hardware. `hwt3100_serial.h/.cpp` itself is just the thin hardware
+  wrapper around it: byte accumulation, calling the parser, setting
+  `timestamp` from `millis()` (deliberately not the parser's job — a
+  hardware clock read has no business in a function meant to be testable
+  without a board), and marshaling to the main loop via
   `TaskQueueProducer`, same mechanism as the parent's NMEA0183 pipeline.
-  Also taps every raw line to the serial terminal broadcaster (2.5).
+  No binary framing/checksum — this is line-based ASCII text parsing,
+  simpler than the parent firmware's NMEA 0183 sentence parsers. Also
+  taps every raw line to the serial terminal broadcaster (2.5).
 - **Write** (only from the calibration command handler, 2.2): exposes a
   single entry point, `SendCommand(HWT3100Command cmd)`, where
   `HWT3100Command` is a closed enum with exactly three values —
@@ -242,12 +250,25 @@ src/
   halser_const.h                       — pin assignments (reused from
                                         parent: GPIO2/3 UART, GPIO4/5 CAN,
                                         GPIO8 LED, GPIO9 button)
-  hwt3100_serial.h/.cpp                 — Serial1 owner (2.1): ASCII line
-                                        read task (parse to
-                                        HeadingReading) + SendCommand()
-                                        write path (3-value
-                                        HWT3100Command enum + lookup
-                                        table; no AT+MODE)
+  hwt3100_types.h                       — HeadingReading, HWT3100Command
+                                        (§3). No Arduino dependency —
+                                        shared by every component below.
+  hwt3100_parser.h/.cpp                 — ParseHWT3100Line(): pure ASCII
+                                        line → HeadingReading parsing,
+                                        no Arduino dependency, unit
+                                        tested via `pio test -e native`
+                                        (docs/plans/hwt3100-serial-parser.md)
+  hwt3100_serial.h/.cpp                 — Serial1 owner (2.1): read task
+                                        (buffers bytes into lines, calls
+                                        ParseHWT3100Line()) +
+                                        SendCommand() write path
+                                        (HWT3100Command enum + lookup
+                                        table; no AT+MODE). Split out from
+                                        the parser so the parsing logic
+                                        itself doesn't need a board to
+                                        test — this file is the
+                                        hardware-facing half, not yet
+                                        implemented.
   hwt3100_calibration_commands.h/.cpp     — named calibration actions →
                                         HWT3100Command, calls
                                         SendCommand() (2.2); the only
@@ -264,6 +285,11 @@ src/
                                         items, sender instantiation, main
                                         event loop (equivalent to the
                                         parent's nmea_gateway.h/.cpp)
+test/
+  test_hwt3100_parser/                    — Unity tests for
+                                        ParseHWT3100Line(), run via the
+                                        native (host, no board) PlatformIO
+                                        environment
 docs/
   plans/                                 — per-feature implementation
                                         plans (see
