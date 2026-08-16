@@ -17,6 +17,10 @@ network in two independent ways:
 Either output can be enabled or disabled independently — the firmware isn't
 built around one being "the real product" and the other a bonus.
 
+On the N2K side, the firmware presents itself as a **B&G Precision-9**
+compass (device-identity fields, PGN set) rather than as a generic/custom
+device — see §1.2, §5.1, §10 for what that means concretely and why.
+
 It is part of the HALSER firmware family and is forked from
 `HALSER-default-firmware` (an NMEA 0183→N2K gateway), which is the
 reference for coding patterns (SensESP setup, N2K sender/value-expiry
@@ -63,8 +67,32 @@ manual and the vendor's own Arduino SDK example (`wit_c_sdk.c`):
 > codebase — not gated, not allowlisted-out, just absent. See §2 and §8.
 
 All N2K PGNs applicable to the data this firmware actually produces
-(heading only — see §3) are implemented and individually selectable in
-the config UI — see §5.1 and §7.
+(heading and computed rate of turn — see §3) are implemented and
+individually selectable in the config UI — see §5.1 and §7.
+
+**B&G Precision-9 emulation.** On the N2K bus, this firmware identifies
+itself as a B&G Precision-9 compass — same product info (model ID,
+software/model version, manufacturer's model serial code, product code),
+same NMEA 2000 device function/class, same manufacturer code — rather
+than as a generic/custom device. This is a deliberate choice, not an
+accident of copying example code: some MFDs/autopilots key certain
+features off recognized product identities, and presenting as a known,
+already-supported compass is more likely to "just work" with them than a
+novel device announcing itself honestly as a HALSER prototype. The
+reference implementation, `htool/ESP32_Precision-9_compass_CMPS14`
+(an open-source ESP32 project doing the same thing for a CMPS14
+9-DOF sensor), is the source for these exact field values — see §10 for
+which fields are cloned verbatim vs. which are deliberately not (the
+"unique number" field, which isn't part of what makes a device
+*recognizable* as a Precision-9 to anything listening on the bus).
+
+Emulating the identity does **not** mean emulating data this hardware
+doesn't have: PGN 127257 (Attitude) is still not implemented (§9.3) since
+the HWT3100 has no accelerometer to derive heel/trim from, honestly or
+otherwise. PGN 127251 (Rate of Turn) *is* newly implemented, but as a
+genuinely computed value (§1.3, §3, §5.1) — a sliding-window derivative
+of real heading readings — not a copied fingerprint with no data behind
+it.
 
 ### 1.3 Terminology
 
@@ -88,6 +116,13 @@ the config UI — see §5.1 and §7.
   mounting misalignment on top of that.
 - **Stale** — sensor data that has aged past its expected update interval
   without a fresh reading, and is no longer trustworthy.
+- **Rate of turn (computed)** — the rate the vessel's heading is
+  changing, in radians/second, positive = turning to starboard. Not
+  sensed directly (the HWT3100 has no gyroscope) — derived by comparing
+  the oldest and newest heading readings within a trailing time window
+  (§3, §10). "Computed" is part of the name deliberately, to keep this
+  distinct from a real gyroscope-sensed rate of turn wherever this spec
+  discusses it.
 
 ## 2. Domain Rules
 
@@ -129,6 +164,20 @@ a hardware capability limit. If a future project needs full attitude
 (pitch/roll), it needs a different sensor; extending this data model
 won't get there.
 
+### Rate of turn (computed, not persisted)
+
+Not a field on `HeadingReading` — it's derived from a trailing window of
+`HeadingReading.heading` values (§1.3), each already timestamped for
+this purpose. Conceptually:
+
+| Field | Type | Notes |
+|---|---|---|
+| rateOfTurn | float, radians/second | (newest heading − oldest heading in window) / elapsed seconds, wraparound-corrected, positive = turning to starboard |
+
+Requires at least two samples spanning a minimum elapsed time within the
+window to produce a value at all (§10) — below that, it's "not
+available," same as any other not-yet-valid reading (§6).
+
 ## 4. Sources / Inputs
 
 - **Single source**: the HWT3100-TTL module, connected via UART to the
@@ -143,19 +192,38 @@ won't get there.
 
 ### 5.1 N2K Output
 
-Only **PGN 127250 — Vessel Heading** is applicable, since the HWT3100
-only produces heading (§3). PGN 127257 (Attitude) is **not implemented**
-— it requires pitch/roll, which this hardware cannot provide; sending it
-with fabricated/NA pitch/roll would misrepresent an Attitude PGN as
-present when the vessel has no attitude sensor. PGN 127250 is
-independently selectable in the config UI on top of the master N2K
-enable/disable switch (§7) — since there's exactly one applicable PGN for
-MVP, the per-PGN toggle mainly matters once/if more PGNs become
-applicable (see §9.2).
+This firmware presents itself on the N2K bus as a **B&G Precision-9
+compass**, cloning the device-identity fields (product info, device
+function/class, manufacturer code) from a known working open-source
+implementation (`htool/ESP32_Precision-9_compass_CMPS14`) — see §1.2 for
+why, and §10 for exactly which fields are cloned vs. derived locally.
+
+Two PGNs are implemented:
+
+- **PGN 127250 — Vessel Heading**: real data, unchanged from before this
+  revision.
+- **PGN 127251 — Rate of Turn**: *computed*, not sensed — the HWT3100
+  has no gyroscope, so this is derived from a sliding window of recent
+  heading readings (§1.3, §3). This is genuinely-derived data (the
+  actual rate the heading has been changing), not a fabricated/NA
+  placeholder sent only to pad out the PGN fingerprint.
+
+**PGN 127257 (Attitude) remains not implemented** — that decision doesn't
+change here. The Precision-9 reference implementation sends it (it reads
+heel/trim from a real accelerometer-equipped IMU), but the HWT3100 has no
+accelerometer; there is no honest way to derive attitude the way rate of
+turn can be derived from heading history. Emulating the Precision-9's
+*identity* doesn't require emulating data this hardware can't produce
+(§9.3 still applies).
+
+Both PGNs are independently selectable in the config UI on top of the
+master N2K enable/disable switch (§7).
 
 Requirement: transmit at a reasonable update rate for helm/autopilot
-displays, and transmit N2K "not available" values when stale (§6). Exact
-transmission rate and field encoding are worked out in ARCHITECTURE.md.
+displays, and transmit N2K "not available" values when stale (§6) —
+this applies to both PGNs, including when there isn't yet enough heading
+history to compute a rate of turn. Exact transmission rate and field
+encoding are worked out in ARCHITECTURE.md.
 
 ### 5.2 SignalK Output
 
@@ -277,6 +345,11 @@ Requirements:
 - Apply a configurable heading calibration offset.
 - Transmit heading via PGN 127250 (Vessel Heading), toggleable, plus a
   master N2K enable/disable switch.
+- Compute and transmit rate of turn via PGN 127251, from a sliding
+  window of heading readings (§1.3, §3, §5.1, §10), independently
+  toggleable.
+- Present as a B&G Precision-9 on the N2K bus (device-identity fields —
+  §1.2, §5.1, §10), not a generic/custom device identity.
 - Transmit heading via SignalK deltas (`navigation.headingMagnetic`,
   SensESP/WiFi), independently toggleable.
 - Detect stale sensor data and actively indicate the fault (LED + SignalK
@@ -353,6 +426,41 @@ Requirements:
   well-meaning addition, the way an excluded-from-an-allowlist command
   theoretically still could be if someone edited the list without
   re-reading this document.
+- **Clone the Precision-9's product info, device function/class, and
+  manufacturer code verbatim; do NOT clone its hardcoded "unique
+  number"** — the identity fields (model ID "Precision-9 Compass",
+  software/model version, product code, device function/class,
+  manufacturer code) are what make a listening MFD/autopilot recognize
+  the device; the "unique number" is purely an N2K bus address-claim
+  differentiator with no bearing on recognizability. The reference
+  project hardcodes one fixed value; reusing that same constant across
+  every install of this firmware would create a real (if unlikely)
+  address-claim collision if two "clones" ever ended up on the same
+  physical N2K bus. Instead, the unique number is derived from this
+  board's own MAC address (matching the pattern the parent
+  HALSER-default-firmware already uses for its own N2K identity) — this
+  differs from a byte-for-byte behavioral clone, but only in the one
+  field that was never part of "looking like a Precision-9" to begin
+  with.
+- **PGN 127257 (Attitude) still isn't implemented, even under
+  "emulate the Precision-9"** — the reference project sends it using
+  real heel/trim from a 9-DOF IMU (CMPS14). The HWT3100 has no
+  accelerometer, so there's no honest data to put in that PGN; sending
+  it anyway (fabricated or NA) would misrepresent capability the device
+  identity now specifically implies it has (a Precision-9 model number
+  *does* legitimately send attitude). Identity emulation intentionally
+  doesn't extend to data emulation.
+- **Rate of turn is computed from a heading sliding window, not
+  fabricated as NA** — the user's explicit direction, and the one place
+  this firmware synthesizes a PGN's data rather than either sending real
+  sensor output or omitting the PGN. Chose a trailing-window derivative
+  (newest heading − oldest heading in the window, wraparound-corrected,
+  divided by elapsed time) over a simple frame-to-frame delta because
+  raw frame-to-frame differences amplify sensor/quantization noise into
+  a jittery rate signal; averaging over a window trades a little
+  responsiveness for a much more usable value on a helm/autopilot
+  display. See ARCHITECTURE.md §2 for the window length and minimum
+  sample-span chosen.
 
 ## 11. Open Questions
 
@@ -376,6 +484,12 @@ Requirements:
   `N2kDoubleNA` when stale, as a side effect of reusing the parent's
   pattern). Needs its own small design pass (LED color/pattern, SignalK
   notification path/format) — see docs/plans/gateway-wiring.md.
+- The rate-of-turn sliding window length and minimum sample-span (chosen
+  in ARCHITECTURE.md §2 as reasonable defaults, not derived from a real
+  helm/autopilot's actual sensitivity requirements) may need tuning once
+  this runs against real hardware and a real display — too short and the
+  reading stays jittery/noisy, too long and it lags real turns. No live
+  hardware was available to tune this empirically during this pass.
 
 Resolved during implementation (see ARCHITECTURE.md and
 docs/plans/gateway-wiring.md for detail): N2K transmission rate for PGN

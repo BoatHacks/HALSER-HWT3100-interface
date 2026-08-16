@@ -70,6 +70,30 @@ class N2kHeadingSender {
   tNMEA2000* nmea2000_;
 };
 
+/// PGN 127251 — Rate of Turn (100ms). Unlike N2kHeadingSender, the value
+/// fed to this sender is computed, not sensed — see RateOfTurnEstimator
+/// (rate_of_turn.h) and SPEC.md §1.3/§5.1/§10 for why. "Not available"
+/// applies identically whether the HWT3100 has gone stale or the
+/// estimator simply doesn't have enough heading history yet — both cases
+/// are "no rate of turn value right now," and ExpiringValue treats them
+/// the same way.
+class N2kRateOfTurnSender {
+ public:
+  explicit N2kRateOfTurnSender(tNMEA2000* nmea2000, unsigned long expiry = 5000)
+      : nmea2000_(nmea2000), rate_of_turn_(expiry) {}
+
+  void send() {
+    tN2kMsg msg;
+    SetN2kPGN127251(msg, 0xff, rate_of_turn_.to_n2k());
+    nmea2000_->SendMsg(msg);
+  }
+
+  ExpiringValue<float> rate_of_turn_;
+
+ private:
+  tNMEA2000* nmea2000_;
+};
+
 }  // namespace halser
 
 #endif  // HALSER_SRC_N2K_SENDERS_H_

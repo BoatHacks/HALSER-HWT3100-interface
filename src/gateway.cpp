@@ -11,6 +11,7 @@
 #include "hwt3100_serial.h"
 #include "hwt3100_types.h"
 #include "n2k_senders.h"
+#include "rate_of_turn.h"
 #include "sensesp/signalk/signalk_output.h"
 #include "sensesp/system/lambda_consumer.h"
 #include "sensesp/system/observablevalue.h"
@@ -26,21 +27,19 @@ namespace {
 tNMEA2000* nmea2000 = nullptr;
 Adafruit_NeoPixel* led = nullptr;
 
+// Rate-of-turn sliding window (SPEC.md §11 flags these as reasonable
+// defaults needing real-hardware tuning, not values derived from an
+// actual helm/autopilot's sensitivity requirements).
+constexpr unsigned long kRateOfTurnWindowMs = 2000;
+constexpr unsigned long kRateOfTurnMinSpanMs = 500;
+
+/// Used for SetDeviceInformation()'s "unique number" — deliberately NOT
+/// the Precision-9 reference's hardcoded value (SPEC.md §10), so that
+/// two devices running this firmware don't collide on the same N2K bus.
 static uint32_t GetBoardSerialNumber() {
   uint8_t mac[6];
   esp_efuse_mac_get_default(mac);
   return (mac[3] << 16) | (mac[4] << 8) | mac[5];
-}
-
-/// Format the WiFi MAC address as a serial number string for N2K product
-/// info. Mirrors the parent HALSER-default-firmware's approach.
-static String GetProductSerialNumber() {
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  char buf[18];
-  snprintf(buf, sizeof(buf), "%02X%02X%02X%02X%02X%02X", mac[0], mac[1],
-           mac[2], mac[3], mac[4], mac[5]);
-  return String(buf);
 }
 
 /// Wires a PersistingObservableValue<bool> up as a one-shot "trigger":
@@ -95,6 +94,16 @@ void run_hwt3100_gateway() {
       ->set_config_schema(
           R"schema({"type":"object","properties":{"value":{"title":"Enabled","type":"boolean"}}})schema");
 
+  auto n2k_rate_of_turn_pgn_enabled = std::make_shared<PersistingObservableValue<bool>>(
+      true, "/n2k/rate_of_turn_pgn_enabled");
+  ConfigItem(n2k_rate_of_turn_pgn_enabled)
+      ->set_title("Enable PGN 127251 (Rate of Turn)")
+      ->set_description(
+          "Computed from a sliding window of heading readings (SPEC.md §5.1) — the HWT3100 has no gyroscope.")
+      ->set_sort_order(111)
+      ->set_config_schema(
+          R"schema({"type":"object","properties":{"value":{"title":"Enabled","type":"boolean"}}})schema");
+
   auto signalk_enabled = std::make_shared<PersistingObservableValue<bool>>(
       true, "/signalk/enabled");
   ConfigItem(signalk_enabled)
@@ -115,22 +124,26 @@ void run_hwt3100_gateway() {
 
   // --- NMEA 2000 (CAN bus via TWAI) ---
 
+  // Identifies as a B&G Precision-9 (SPEC.md §1.2, §5.1, §10) — product
+  // info and device function/class/manufacturer code are cloned from
+  // htool/ESP32_Precision-9_compass_CMPS14. The "unique number" below is
+  // deliberately NOT cloned; it's derived from this board's own MAC
+  // (GetBoardSerialNumber()), per the design decision in SPEC.md §10.
   nmea2000 = new tNMEA2000_esp32(kCANTxPin, kCANRxPin);
   nmea2000->SetN2kCANSendFrameBufSize(150);
   nmea2000->SetN2kCANReceiveFrameBufSize(150);
-  auto product_serial = GetProductSerialNumber();
   nmea2000->SetProductInformation(
-      product_serial.c_str(),          // Serial number (from WiFi MAC)
-      100,                              // Product code
-      "HALSER HWT3100 Compass Bridge",  // Model ID
-      "1.0.0",                          // Software version
-      "1.0.0"                           // Model version
+      kProductModelSerialCode,
+      kProductCode,
+      kProductModelId,
+      kProductSoftwareVersion,
+      kProductModelVersion
   );
   nmea2000->SetDeviceInformation(
-      GetBoardSerialNumber(),
-      kDeviceFunction,   // TODO(halser_const.h): verify correct value
-      kDeviceClass,      // TODO(halser_const.h): verify correct value
-      kManufacturerCode  // 2046 = Hat Labs
+      GetBoardSerialNumber(),  // unique number — MAC-derived, not cloned
+      kDeviceFunction,
+      kDeviceClass,
+      kManufacturerCode
   );
   nmea2000->SetMode(tNMEA2000::N2km_NodeOnly, 74);
   nmea2000->EnableForward(false);
@@ -140,10 +153,15 @@ void run_hwt3100_gateway() {
   event_loop()->onRepeat(1, []() { nmea2000->ParseMessages(); });
 
   auto heading_sender = new halser::N2kHeadingSender(nmea2000);
-  event_loop()->onRepeat(100, [heading_sender, n2k_enabled,
-                                n2k_heading_pgn_enabled]() {
+  auto rate_of_turn_sender = new halser::N2kRateOfTurnSender(nmea2000);
+  event_loop()->onRepeat(100, [heading_sender, rate_of_turn_sender, n2k_enabled,
+                                n2k_heading_pgn_enabled,
+                                n2k_rate_of_turn_pgn_enabled]() {
     if (n2k_enabled->get() && n2k_heading_pgn_enabled->get()) {
       heading_sender->send();
+    }
+    if (n2k_enabled->get() && n2k_rate_of_turn_pgn_enabled->get()) {
+      rate_of_turn_sender->send();
     }
   });
 
@@ -170,6 +188,9 @@ void run_hwt3100_gateway() {
   raw_line_producer->connect_to(new LambdaConsumer<HWT3100RawLine>(
       [serial_terminal](HWT3100RawLine line) { serial_terminal->AddLine(line); }));
 
+  auto rate_of_turn_estimator = new halser::RateOfTurnEstimator(
+      kRateOfTurnWindowMs, kRateOfTurnMinSpanMs);
+
   heading_producer->connect_to(new LambdaConsumer<HeadingReading>(
       [=](HeadingReading reading) {
         HeadingReading corrected =
@@ -177,6 +198,12 @@ void run_hwt3100_gateway() {
         heading_sender->heading_.update(corrected.heading);
         if (signalk_enabled->get()) {
           sk_heading_output->set(corrected.heading);
+        }
+
+        rate_of_turn_estimator->AddSample(corrected.heading, corrected.timestamp);
+        float rate_of_turn = 0.0f;
+        if (rate_of_turn_estimator->GetRateOfTurn(&rate_of_turn)) {
+          rate_of_turn_sender->rate_of_turn_.update(rate_of_turn);
         }
       }));
 

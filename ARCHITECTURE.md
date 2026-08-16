@@ -21,19 +21,28 @@ HWT3100-TTL  ◄─────────────────────�
    │                                                       │
    │                             ┌──────────────────┬──────┴────────────┐
    │                             ▼                  ▼                   ▼
-   │                   Calibration offset    Live serial terminal   (raw lines
-   │                   applied (once)        tap (text display)     also feed here)
-   │                             │            read-only display
-   │             ┌───────────────┴───────────────┐  │
-   │             ▼                                ▼  ▼
-   │   N2K sender (PGN 127250,            SignalK delta sender      Web UI (WebSocket)
-   │   ExpiringValue pattern)              (SensESP, WiFi)
-   │             │                                │
-   │             ▼                                ▼
-   │ tNMEA2000_esp32 (TWAI, GPIO4/5)      SignalK server (WiFi)
+   │                   Calibration offset    Serial log ring buffer  (raw lines
+   │                   applied (once)        (30 lines, config REST  also feed here)
+   │                             │            API, §2.5)
+   │                             ├─────────────────┐
+   │                             ▼                  ▼
+   │                   RateOfTurnEstimator   SignalK delta sender
+   │                   (sliding window,      (navigation.headingMagnetic,
+   │                   §2.4a)                SensESP, WiFi)
+   │                             │                  │
+   │             ┌───────────────┴───────┐          ▼
+   │             ▼                       ▼   SignalK server (WiFi)
+   │   N2K senders: PGN 127250    PGN 127251
+   │   (heading), ExpiringValue   (rate of turn),
+   │   pattern                    ExpiringValue pattern
+   │             │                       │
+   │             ▼                       ▼
+   │        tNMEA2000_esp32 (TWAI, GPIO4/5) — identifies as
+   │        B&G Precision-9 (§5, §10)
    │
-   └──────────────── Calibration command handler ◄──── Web UI (named actions,
-                      (fixed AT+CALI list, §2.2)        not free text)
+   └──────────────── Calibration command handler ◄──── Web UI (config
+                      (fixed AT+CALI list, §2.2)        REST toggles,
+                                                         not free text)
 ```
 
 Single ESP32-C3 firmware, no boot-mode routing (unlike the parent
@@ -50,6 +59,17 @@ needs as plain text and accepts the calibration commands as plain `AT+`
 text — the firmware never switches the module into Modbus mode and never
 implements `AT+MODE` (SPEC §1.2, §2). This is not a feature gap; it's
 deliberate and permanent (SPEC §9.3).
+
+On the N2K bus, this firmware presents as a **B&G Precision-9** — its
+device-identity fields (product info, device function/class,
+manufacturer code) are cloned from `htool/ESP32_Precision-9_compass_CMPS14`,
+an open-source reference implementation for a different sensor doing the
+same thing. Identity emulation is scoped to what makes the device
+*recognizable*, not to fabricating data: rate of turn (PGN 127251) is
+genuinely computed from heading history (2.4a), and attitude (PGN
+127257, which the reference sends) is still not implemented, because
+there's no honest source for it on this hardware (SPEC §1.2, §5.1, §9.3,
+§10).
 
 ## 2. System Components
 
@@ -115,20 +135,47 @@ calibration procedure via serial commands. The two are related in purpose
 (both about getting accurate heading out of the module) but don't share
 code — one never touches the serial link, the other only does.
 
-### 2.4 N2K Sender (`n2k_senders.h`)
+### 2.4 N2K Senders (`n2k_senders.h`)
 
-Reuses the parent firmware's `N2kHeadingSender` (PGN 127250) as-is,
-unmodified — it already exists, already uses the `ExpiringValue<T>`
-pattern, and already does exactly what SPEC §6 (stale-data behavior)
-asks: `ExpiringValue::to_n2k()` returns `N2kDoubleNA` once a value goes
-stale, satisfying the "transmit N2K not-available values" decision for
-free. No PGN 127257 (Attitude) sender exists — the hardware can't
-supply pitch/roll, so there's nothing to send it with (SPEC §5.1, §10).
+- `N2kHeadingSender` — PGN 127250, adapted from the parent firmware's
+  version. Uses the `ExpiringValue<T>` pattern, which already does
+  exactly what SPEC §6 (stale-data behavior) asks: `to_n2k()` returns
+  `N2kDoubleNA` once a value goes stale, satisfying the "transmit N2K
+  not-available values" decision for free.
+- `N2kRateOfTurnSender` — PGN 127251, same `ExpiringValue<T>` pattern,
+  fed by `RateOfTurnEstimator` (2.4a) rather than directly by the
+  HWT3100 — the hardware has no gyroscope (SPEC §1.3, §5.1, §10).
+  "Not available" covers both staleness and "not enough heading history
+  yet" identically, since both mean `ExpiringValue::update()` hasn't
+  been called recently.
 
-Has its own enable/disable flag (config, 2.6) checked before `send()` is
-called from the periodic send loop, independent of the `ExpiringValue`
-staleness mechanism — "disabled" and "stale" are different states
-(disabled = never sends; stale = sends N/A values).
+No PGN 127257 (Attitude) sender exists, still — the hardware can't
+supply pitch/roll, and unlike rate of turn there's no honest way to
+derive it from data this hardware has (SPEC §5.1, §9.3, §10).
+
+Each sender has its own enable/disable flag (config, 2.6) checked before
+`send()` is called from the periodic send loop, independent of the
+`ExpiringValue` staleness mechanism — "disabled" and "stale" are
+different states (disabled = never sends; stale = sends N/A values).
+
+### 2.4a Rate of Turn Estimator (`rate_of_turn.h/.cpp`, class `RateOfTurnEstimator`)
+
+Pure logic, no Arduino dependency (same split rationale as the HWT3100
+parser, 2.1) — unit tested on the host via `pio test -e native`. Holds a
+fixed-size ring buffer of recent (heading, timestamp) samples and, on
+request, returns the wraparound-corrected angular difference between the
+oldest and newest sample *within a trailing time window*, divided by
+elapsed time, as radians/second. Returns "not available" (no value) when
+there isn't yet at least a minimum time span of history — see SPEC §11
+for why the window (2000ms) and minimum span (500ms) are flagged as
+needing real-hardware tuning rather than being load-bearing constants.
+
+Fed from the same `LambdaConsumer` in `gateway.cpp` (2.6) that applies
+the calibration offset and updates the heading sender — every corrected
+`HeadingReading` becomes one sample. This keeps rate-of-turn computation
+downstream of calibration (so a heading offset change doesn't look like
+an instantaneous "turn" to the estimator) without adding a second
+observer of the raw `TaskQueueProducer`.
 
 ### 2.5 Serial Terminal (`serial_terminal.h/.cpp`, class `SerialTerminal`)
 
@@ -229,8 +276,10 @@ Same as the parent firmware (see its AGENTS.md), plus one addition:
 | Layer | Choice | Why |
 |---|---|---|
 | Framework | Arduino (ESP32-C3), SensESP 3.2.0 | Reused for consistency with the HALSER family; gets WiFi, web UI, SignalK client, OTA for free. |
-| N2K | ttlappalainen/NMEA2000-library + NMEA2000_twai | Same as parent; reuses the parent's existing `N2kHeadingSender`/`SetN2kPGN127250` as-is. |
+| N2K | ttlappalainen/NMEA2000-library + NMEA2000_twai | Same as parent; adapts the parent's `N2kHeadingSender`/`SetN2kPGN127250` and adds `SetN2kPGN127251` for rate of turn. |
+| N2K device identity | Cloned from `htool/ESP32_Precision-9_compass_CMPS14` | Presents as a B&G Precision-9 rather than a generic device — SPEC §1.2, §5.1, §10. Product info + device function/class + manufacturer code cloned verbatim; the "unique number" is deliberately not, to avoid N2K address-claim collisions between multiple installs. |
 | Serial parsing | Custom (this project) | Simple line-based ASCII parsing (`Magx=<n>,y=<n>,z=<n>,w=<n.n>\r\n`) — no library needed, comparable effort to the parent's NMEA 0183 sentence parsers but simpler (no checksum). |
+| Rate of turn | Custom (this project) | No library needed — a sliding-window derivative of heading readings is a small, self-contained computation (2.4a); no existing library targets "derive ROT from a compass with no gyroscope." |
 | Serial log transport | SensESP's existing config REST API (no new dependency) | SensESP's `HTTPServer` wraps ESP-IDF's native `esp_http_server`, not `ESPAsyncWebServer` as first assumed, and exposes no public hook for custom HTTP/WebSocket endpoints at all. Reusing the already-public config GET/PUT mechanism (§2.5) needed nothing new; a dedicated WebSocket endpoint would have needed a second, hand-rolled `esp_http_server` instance. |
 | RGB LED | Adafruit NeoPixel | Instantiated in `gateway.cpp`; fault indication (SPEC §6) itself is not yet implemented — see docs/plans/gateway-wiring.md. |
 
@@ -246,7 +295,8 @@ Same as the parent firmware (see its AGENTS.md), plus one addition:
   edge cases remain an open question for implementation-time hardware
   testing (SPEC §11).
 - **NMEA 2000 bus** — via `tNMEA2000_esp32`, GPIO4 TX / GPIO5 RX (TWAI),
-  unchanged from the parent firmware.
+  same transport as the parent firmware; device identity presented on
+  the bus is the B&G Precision-9 clone (§1, §4), not a HALSER identity.
 - **SignalK server** — via SensESP's WiFi + mDNS discovery + WebSocket
   delta client, unchanged from the parent firmware's mechanism.
 - **Browser (web UI)** — SensESP's own config UI only. The serial log
@@ -292,7 +342,10 @@ src/
   main.cpp                            — entry point, run_hwt3100_gateway()
   halser_const.h                       — pin assignments (reused from
                                         parent: GPIO2/3 UART, GPIO4/5 CAN,
-                                        GPIO8 LED, GPIO9 button)
+                                        GPIO8 LED, GPIO9 button) + N2K
+                                        device identity constants cloned
+                                        from the Precision-9 reference
+                                        (§1, §4)
   hwt3100_types.h                       — HeadingReading, HWT3100Command
                                         (§3). No Arduino dependency —
                                         shared by every component below.
@@ -319,9 +372,16 @@ src/
                                         method is one call through).
   calibration_offset.h                    — heading offset application
                                         (2.3), a pure function
+  rate_of_turn.h/.cpp                     — RateOfTurnEstimator (2.4a):
+                                        pure sliding-window ROT
+                                        computation, no Arduino
+                                        dependency, unit tested via
+                                        `pio test -e native`
+                                        (docs/plans/precision9-rate-of-turn.md)
   n2k_senders.h                           — ExpiringValue<T> +
-                                        N2kHeadingSender, PGN 127250
-                                        only, adapted from the parent's
+                                        N2kHeadingSender (PGN 127250) +
+                                        N2kRateOfTurnSender (PGN 127251),
+                                        adapted from the parent's
                                         pattern (2.4)
   serial_terminal.h/.cpp                  — SerialTerminal (2.5): a
                                         30-line ring buffer exposed via
@@ -339,6 +399,9 @@ test/
   test_hwt3100_parser/                    — Unity tests for
                                         ParseHWT3100Line(), run via the
                                         native (host, no board) PlatformIO
+                                        environment
+  test_rate_of_turn/                      — Unity tests for
+                                        RateOfTurnEstimator, same native
                                         environment
 docs/
   plans/                                 — per-feature implementation
@@ -381,3 +444,10 @@ bus (also optional/toggleable).
   feature. If a future need for higher throughput or Modbus-specific
   functionality ever arises, treat it as reopening a closed safety
   decision requiring fresh review, not a routine roadmap item.
+- `RateOfTurnEstimator`'s window (2000ms) and minimum span (500ms) are
+  compile-time constants in `gateway.cpp`, not config items — SPEC §11
+  flags them as likely needing real-hardware tuning. If that tuning
+  turns out to need per-installation adjustment (rather than a one-time
+  firmware-wide constant change), exposing them as config values follows
+  the same `PersistingObservableValue` pattern already used everywhere
+  else in `gateway.cpp` — no architectural change needed, just wiring.
