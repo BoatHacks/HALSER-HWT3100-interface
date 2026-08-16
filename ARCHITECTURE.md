@@ -198,12 +198,37 @@ different states (disabled = never sends; stale = sends N/A values).
 Pure logic, no Arduino dependency (same split rationale as the HWT3100
 parser, 2.1) — unit tested on the host via `pio test -e native`. Holds a
 fixed-size ring buffer of recent (heading, timestamp) samples and, on
-request, returns the wraparound-corrected angular difference between the
-oldest and newest sample *within a trailing time window*, divided by
-elapsed time, as radians/second. Returns "not available" (no value) when
-there isn't yet at least a minimum time span of history — see SPEC §11
-for why the window (2000ms) and minimum span (500ms) are flagged as
-needing real-hardware tuning rather than being load-bearing constants.
+request, fits a **least-squares line through every sample within a
+trailing time window** and returns its slope, as radians/second —
+`GetRateOfTurn()` walks the window from oldest to newest, accumulating
+`Σt, Σh, Σt², Σth` and solving the standard two-variable normal
+equations, rather than differencing just the two endpoint samples.
+
+This replaced an earlier two-point-difference version after research
+into how others compute rate of turn (marine gyrocompass patents,
+pypilot's own heading-rate derivation, general numerical-differentiation
+literature) converged on the same point: finite differences amplify
+noise, and a windowed regression is the standard fix, using data the
+ring buffer was already storing but the two-point version discarded.
+The two are mathematically identical whenever exactly two samples fall
+in the window — a line through two points has only one possible slope —
+so every existing two-sample unit test kept its expected value
+unchanged; new tests cover the ≥3-sample case specifically (a noisy
+interior sample measurably pulling the fitted slope away from what a
+pure endpoint difference would give, and multi-sample 0/360 wraparound).
+
+Heading is unwrapped once per step across the *entire* included range
+(not just at the two endpoints) before fitting, using the same shortest-
+signed-angular-delta trick as before — each successive sample's raw
+heading is compared to the previous one, and the (possibly several)
+individual unwrap steps accumulate into a continuous value the linear
+fit can safely operate on.
+
+Returns "not available" (no value) when there isn't yet at least a
+minimum time span of history within the window (even if ≥2 samples exist
+in the buffer overall) — see SPEC §11 for why the window (2000ms) and
+minimum span (500ms) are flagged as needing real-hardware tuning rather
+than being load-bearing constants.
 
 Fed from the same `LambdaConsumer` in `gateway.cpp` (2.6) that applies
 the calibration offset and updates the heading sender — every corrected

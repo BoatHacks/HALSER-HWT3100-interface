@@ -172,7 +172,7 @@ this purpose. Conceptually:
 
 | Field | Type | Notes |
 |---|---|---|
-| rateOfTurn | float, radians/second | (newest heading − oldest heading in window) / elapsed seconds, wraparound-corrected, positive = turning to starboard |
+| rateOfTurn | float, radians/second | least-squares slope of heading vs. time over every sample in the window (wraparound-unwrapped), positive = turning to starboard — see §10 for why a windowed fit rather than a two-point difference |
 
 Requires at least two samples spanning a minimum elapsed time within the
 window to produce a value at all (§10) — below that, it's "not
@@ -494,14 +494,26 @@ which has none either).
 - **Rate of turn is computed from a heading sliding window, not
   fabricated as NA** — the user's explicit direction, and the one place
   this firmware synthesizes a PGN's data rather than either sending real
-  sensor output or omitting the PGN. Chose a trailing-window derivative
-  (newest heading − oldest heading in the window, wraparound-corrected,
-  divided by elapsed time) over a simple frame-to-frame delta because
-  raw frame-to-frame differences amplify sensor/quantization noise into
-  a jittery rate signal; averaging over a window trades a little
-  responsiveness for a much more usable value on a helm/autopilot
-  display. See ARCHITECTURE.md §2 for the window length and minimum
-  sample-span chosen.
+  sensor output or omitting the PGN.
+- **The window's rate is a least-squares slope over every sample in the
+  window, not a two-point endpoint difference** — an explicit
+  improvement made after researching how others compute rate of turn
+  (marine gyrocompass patents, pypilot's own heading-rate derivation,
+  and the general numerical-differentiation literature). The original
+  version of this estimator only used the oldest and newest sample in
+  the window, discarding everything buffered in between; finite
+  differences of that kind are well known to amplify sensor noise, and
+  discarding the interior samples wasted data the ring buffer was
+  already storing anyway. A windowed least-squares fit uses all of it,
+  is strictly more robust to noise, and is mathematically identical to
+  the old two-point method whenever only two samples fall in the window
+  (a straight line through two points has one possible slope), so this
+  didn't regress the common case — it only changed behavior when three
+  or more samples are available, which is exactly where it should help.
+  See ARCHITECTURE.md §2.4a for the window length and minimum sample-span
+  chosen, and for how heading is unwrapped across the whole window (not
+  just at the two endpoints) so the fit isn't corrupted by the 0/360
+  boundary.
 - **No dedicated LED for fault indication; SensESP's connection-status
   LED keeps sole ownership of GPIO8** — an earlier draft of §6 required
   RGB LED fault indication. Implementation found `gateway.cpp` was

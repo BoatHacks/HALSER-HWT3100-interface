@@ -43,24 +43,63 @@ bool RateOfTurnEstimator::GetRateOfTurn(float* rate_of_turn_rad_per_s) const {
   // be overwritten holds the oldest surviving sample).
   size_t oldest_index = (count_ < kMaxSamples) ? 0 : next_;
 
-  const Sample* oldest_in_window = &newest;
+  // Find the offset (within the chronological walk starting at
+  // oldest_index) of the first sample that's within the window. Every
+  // sample from there through `newest` participates in the regression
+  // below; samples older than the window are simply skipped, same as
+  // before.
+  size_t start_offset = count_;  // sentinel: "none found"
   for (size_t i = 0; i < count_; i++) {
     size_t idx = (oldest_index + i) % kMaxSamples;
     if (samples_[idx].timestamp_ms >= window_start_ms) {
-      oldest_in_window = &samples_[idx];
+      start_offset = i;
       break;
     }
   }
+  if (start_offset == count_) return false;  // defensive; newest always qualifies
 
-  unsigned long elapsed_ms =
-      newest.timestamp_ms - oldest_in_window->timestamp_ms;
+  size_t first_idx = (oldest_index + start_offset) % kMaxSamples;
+  unsigned long elapsed_ms = newest.timestamp_ms - samples_[first_idx].timestamp_ms;
   if (elapsed_ms < min_span_ms_) return false;
 
-  float diff_degrees =
-      AngularDifferenceDegrees(oldest_in_window->heading_degrees, newest.heading_degrees);
-  float elapsed_s = static_cast<float>(elapsed_ms) / 1000.0f;
+  // Windowed least-squares slope over every sample in the window, not
+  // just the two endpoints -- a plain two-point finite difference is
+  // known to amplify per-sample noise, since it throws away every
+  // sample in between. Fitting a line and taking its slope uses all the
+  // buffered data and is the standard technique for differentiating
+  // noisy sampled signals. Heading is unwrapped relative to the first
+  // included sample (each step advances by the shortest signed angular
+  // delta) so the fit isn't corrupted by the 0/360 wrap boundary.
+  double sum_t = 0.0, sum_h = 0.0, sum_tt = 0.0, sum_th = 0.0;
+  size_t n = 0;
+  float unwrapped_heading = samples_[first_idx].heading_degrees;
+  float prev_heading = unwrapped_heading;
+  unsigned long base_ms = samples_[first_idx].timestamp_ms;
 
-  *rate_of_turn_rad_per_s = (diff_degrees * kDegreesToRadians) / elapsed_s;
+  for (size_t i = start_offset; i < count_; i++) {
+    size_t idx = (oldest_index + i) % kMaxSamples;
+    const Sample& sample = samples_[idx];
+    if (i > start_offset) {
+      unwrapped_heading += AngularDifferenceDegrees(prev_heading, sample.heading_degrees);
+      prev_heading = sample.heading_degrees;
+    }
+    double t = static_cast<double>(sample.timestamp_ms - base_ms);
+    double h = static_cast<double>(unwrapped_heading);
+    sum_t += t;
+    sum_h += h;
+    sum_tt += t * t;
+    sum_th += t * h;
+    n++;
+  }
+
+  double denominator = static_cast<double>(n) * sum_tt - sum_t * sum_t;
+  if (denominator == 0.0) return false;  // all samples at the same timestamp
+
+  double slope_degrees_per_ms =
+      (static_cast<double>(n) * sum_th - sum_t * sum_h) / denominator;
+
+  *rate_of_turn_rad_per_s =
+      static_cast<float>(slope_degrees_per_ms * 1000.0) * kDegreesToRadians;
   return true;
 }
 

@@ -99,6 +99,42 @@ static void test_startup_window_clamp_does_not_underflow(void) {
   TEST_ASSERT_TRUE(estimator.GetRateOfTurn(&rate));
 }
 
+static void test_regression_uses_all_samples_not_just_endpoints(void) {
+  // A pure two-point method (endpoints only) would give (20-0)/1000ms =
+  // 20 deg/s regardless of the middle sample. The windowed
+  // least-squares fit should be pulled away from that by the off-line
+  // interior point at (300ms, 15deg) -- demonstrating every buffered
+  // sample participates, not just the first and last.
+  RateOfTurnEstimator estimator(2000, 500);
+  estimator.AddSample(0.0f, 0);
+  estimator.AddSample(15.0f, 300);
+  estimator.AddSample(20.0f, 1000);
+  float rate = 0.0f;
+  TEST_ASSERT_TRUE(estimator.GetRateOfTurn(&rate));
+  // Least-squares slope for these 3 points works out to ~17.72 deg/s
+  // (0.3093 rad/s) -- meaningfully different from the naive endpoints-
+  // only 20 deg/s (0.3491 rad/s), confirming the interior sample moved
+  // the estimate.
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.3093f, rate);
+  TEST_ASSERT_TRUE(fabsf(rate - 0.3491f) > 0.02f);
+}
+
+static void test_wraparound_regression_multiple_samples(void) {
+  // Three collinear samples turning through the 0/360 boundary: 350 ->
+  // 365(=5) -> 380(=20), each step +15 deg. Verifies unwrapping is
+  // applied per-step across the whole window, not just at the two
+  // endpoints -- a naive fit on raw (unwrapped) values would see
+  // 350 -> 5 -> 20 and badly misread the first step as -345 deg.
+  RateOfTurnEstimator estimator(2000, 500);
+  estimator.AddSample(350.0f, 0);
+  estimator.AddSample(5.0f, 500);
+  estimator.AddSample(20.0f, 1000);
+  float rate = 0.0f;
+  TEST_ASSERT_TRUE(estimator.GetRateOfTurn(&rate));
+  // 30 deg/s = 0.5236 rad/s
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.5236f, rate);
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_not_enough_samples);
@@ -110,5 +146,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_wraparound_counterclockwise_through_north);
   RUN_TEST(test_uses_oldest_and_newest_within_window);
   RUN_TEST(test_startup_window_clamp_does_not_underflow);
+  RUN_TEST(test_regression_uses_all_samples_not_just_endpoints);
+  RUN_TEST(test_wraparound_regression_multiple_samples);
   return UNITY_END();
 }
