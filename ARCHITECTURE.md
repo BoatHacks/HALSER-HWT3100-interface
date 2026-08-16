@@ -130,24 +130,54 @@ called from the periodic send loop, independent of the `ExpiringValue`
 staleness mechanism — "disabled" and "stale" are different states
 (disabled = never sends; stale = sends N/A values).
 
-### 2.5 Serial Terminal Broadcaster
+### 2.5 Serial Terminal (`serial_terminal.h/.cpp`, class `SerialTerminal`)
 
-Receives raw lines from 2.1 and forwards them to the web UI as plain
-text, per SPEC §8.1 — no hex/decoded toggle needed since the wire format
-is already human-readable ASCII (unlike the binary-protocol assumption in
-an earlier draft of this design). Pushes to connected browsers over a
-dedicated WebSocket endpoint (2.7 covers why a dedicated endpoint, not
-SensESP's own channel). Display-only, per §2.1/§2.2 — this component
-never gets a reference to `SendCommand`.
+**Implementation-time correction**: this is no longer a WebSocket
+broadcaster. Reading SensESP 3.2.0's actual vendored source turned up two
+things ARCHITECTURE.md had gotten wrong from the outside: (1) SensESP's
+`HTTPServer` wraps ESP-IDF's native `esp_http_server`, not
+`ESPAsyncWebServer`/`AsyncWebSocket`; (2) more fundamentally, there is no
+public way to add a custom HTTP handler at all — `SensESPApp`'s
+`http_server_` is `protected` with no accessor anywhere in the public
+API, and every `add_handler()` call in the library happens internally
+during the framework's own `build()`. See
+docs/plans/gateway-wiring.md for the full finding.
 
-### 2.6 Configuration / Web UI Wiring
+Resolution: `SerialTerminal` is a fixed-size ring buffer (last 30 raw
+lines) exposed through SensESP's existing, already-public **config REST
+API** — it implements `Saveable`+`Serializable` directly (not
+`FileSystemSaveable`, so `load()`/`save()`/`clear()` stay no-ops and
+nothing here ever hits flash) and is registered via `ConfigItem()` like
+any other config value. `to_json()` serializes the buffer; `from_json()`
+is left at `Serializable`'s default (`return false`), making writes a
+no-op — a read-only view. `AddLine()` is called from a plain
+`LambdaConsumer` set up in gateway.cpp (2.6), not by this class reading
+off a `TaskQueueProducer` itself, keeping it a plain buffer with no
+FreeRTOS/event-loop concerns of its own. Display-only, per §2.1/§2.2 —
+this component never gets a reference to `SendCommand`.
+
+The trade-off: this reads as config fields in SensESP's auto-generated
+config UI, not a dedicated live-scrolling terminal widget. Accepted per
+the user decision recorded in docs/plans/gateway-wiring.md.
+
+### 2.6 Configuration / Web UI Wiring (`gateway.cpp`)
 
 Uses SensESP's `ConfigItem` + `PersistingObservableValue` pattern (as the
 parent firmware does for NMEA 0183 bit rate) for every SPEC §7 config
 value: N2K master enable, PGN 127250 enable, SignalK enable, calibration
-offset, WiFi/SignalK connection (SensESP's own built-in config UI). The
-calibration *command* action buttons (§8.2/2.2) live here too, as a UI
-concern, but the actual command dispatch is 2.2's responsibility, not
+offset, WiFi/SignalK connection (SensESP's own built-in config UI).
+
+Calibration *commands* (§8.2/2.2) use the same mechanism, reframed as
+one-shot triggers: each is a `PersistingObservableValue<bool>` that,
+when set `true` (via the config UI), fires the corresponding
+`CalibrationCommandHandler` method and then immediately resets itself to
+`false` so it can be triggered again. Trade-off, accepted: if the device
+loses power between the `true` write and the `false` reset, the next
+boot's initial config-load emit could replay the command — acceptable
+because HWT3100 calibration commands are safe to resend, unlike
+`AT+MODE` (SPEC §1.2, §2). `gateway.cpp` constructs and owns the two
+`TaskQueueProducer`s (2.1) and the `SerialTerminal`/calibration-trigger
+config items; the actual command dispatch stays 2.2's responsibility, not
 this component's.
 
 ### 2.7 SignalK Delta Sender
@@ -164,15 +194,11 @@ See SPEC.md §3 for the conceptual model. In code:
 
 ```cpp
 struct HeadingReading {
-  float heading;      // degrees, 0-360, magnetic, offset-corrected
-  int16_t mag_x;       // raw magnetic field X, diagnostic use only
-  int16_t mag_y;       // raw magnetic field Y, diagnostic use only
-  int16_t mag_z;       // raw magnetic field Z, diagnostic use only
-  unsigned long timestamp;  // millis() of last successful sensor read
-};
-
-struct CalibrationOffset {
-  float heading_offset = 0.0f;
+  float heading = 0.0f;   // degrees, 0-360, magnetic, offset-corrected
+  int32_t mag_x = 0;      // raw magnetic field X, diagnostic use only
+  int32_t mag_y = 0;      // raw magnetic field Y, diagnostic use only
+  int32_t mag_z = 0;      // raw magnetic field Z, diagnostic use only
+  unsigned long timestamp = 0;  // millis() of last successful sensor read
 };
 
 enum class HWT3100Command {
@@ -180,7 +206,17 @@ enum class HWT3100Command {
   kEndCalibration,     // AT+CALI=0
   kClearCalibration,   // AT+CALI=2
 };
+
+struct HWT3100RawLine {  // raw serial line for the terminal (§2.5)
+  static constexpr size_t kMaxLength = 128;
+  char text[kMaxLength] = {0};
+};
 ```
+
+No separate `CalibrationOffset` struct exists in code — the offset is a
+single `float`, held directly by a `PersistingObservableValue<float>` in
+`gateway.cpp` (2.6); a one-field wrapper struct would have added
+indirection without buying anything.
 
 No pitch/roll fields exist, deliberately (SPEC §3, §9.3) — the HWT3100
 cannot produce them. `HWT3100Command` has exactly three values; there is
@@ -195,8 +231,8 @@ Same as the parent firmware (see its AGENTS.md), plus one addition:
 | Framework | Arduino (ESP32-C3), SensESP 3.2.0 | Reused for consistency with the HALSER family; gets WiFi, web UI, SignalK client, OTA for free. |
 | N2K | ttlappalainen/NMEA2000-library + NMEA2000_twai | Same as parent; reuses the parent's existing `N2kHeadingSender`/`SetN2kPGN127250` as-is. |
 | Serial parsing | Custom (this project) | Simple line-based ASCII parsing (`Magx=<n>,y=<n>,z=<n>,w=<n.n>\r\n`) — no library needed, comparable effort to the parent's NMEA 0183 sentence parsers but simpler (no checksum). |
-| Live terminal transport | `ESPAsyncWebServer`/`AsyncWebSocket` (bundled with SensESP's dependencies) | SensESP is itself built on ESPAsyncWebServer; adding one more `AsyncWebSocket` endpoint alongside it avoids pulling in a second web/socket stack. To be confirmed against the exact SensESP 3.2.0 dependency tree during implementation. |
-| RGB LED | Adafruit NeoPixel | Reused as-is for fault indication (SPEC §6). |
+| Serial log transport | SensESP's existing config REST API (no new dependency) | SensESP's `HTTPServer` wraps ESP-IDF's native `esp_http_server`, not `ESPAsyncWebServer` as first assumed, and exposes no public hook for custom HTTP/WebSocket endpoints at all. Reusing the already-public config GET/PUT mechanism (§2.5) needed nothing new; a dedicated WebSocket endpoint would have needed a second, hand-rolled `esp_http_server` instance. |
+| RGB LED | Adafruit NeoPixel | Instantiated in `gateway.cpp`; fault indication (SPEC §6) itself is not yet implemented — see docs/plans/gateway-wiring.md. |
 
 ## 5. Integration Points
 
@@ -213,8 +249,9 @@ Same as the parent firmware (see its AGENTS.md), plus one addition:
   unchanged from the parent firmware.
 - **SignalK server** — via SensESP's WiFi + mDNS discovery + WebSocket
   delta client, unchanged from the parent firmware's mechanism.
-- **Browser (web UI)** — SensESP's own config UI, plus the dedicated
-  WebSocket endpoint for the serial terminal (2.5, 2.7).
+- **Browser (web UI)** — SensESP's own config UI only. The serial log
+  (2.5) and calibration commands (2.2, 2.6) both ride the same existing
+  config REST API rather than a separate endpoint (see §4).
 
 ## 6. Security Considerations
 
@@ -269,28 +306,35 @@ src/
                                         ParseHWT3100Line()) +
                                         SendCommand() write path
                                         (HWT3100Command enum + lookup
-                                        table; no AT+MODE). Split out from
-                                        the parser so the parsing logic
-                                        itself doesn't need a board to
-                                        test — this file is the
-                                        hardware-facing half, not yet
-                                        implemented.
-  hwt3100_calibration_commands.h/.cpp     — named calibration actions →
-                                        HWT3100Command, calls
-                                        SendCommand() (2.2); the only
-                                        component that does
+                                        table; no AT+MODE). The
+                                        hardware-facing half, split out
+                                        from the parser so the parsing
+                                        logic itself doesn't need a board
+                                        to test.
+  hwt3100_calibration_commands.h          — CalibrationCommandHandler
+                                        (2.2): named calibration actions
+                                        → SendCommand(); the only
+                                        component that calls it. Small
+                                        enough to stay header-only (each
+                                        method is one call through).
   calibration_offset.h                    — heading offset application
-                                        (2.3)
-  n2k_senders.h                           — PGN 127250 sender only,
-                                        reused from the parent's
-                                        ExpiringValue pattern (2.4)
-  serial_terminal.h/.cpp                  — raw line buffering, WebSocket
-                                        broadcast (2.5), read-only, no
-                                        reference to SendCommand()
+                                        (2.3), a pure function
+  n2k_senders.h                           — ExpiringValue<T> +
+                                        N2kHeadingSender, PGN 127250
+                                        only, adapted from the parent's
+                                        pattern (2.4)
+  serial_terminal.h/.cpp                  — SerialTerminal (2.5): a
+                                        30-line ring buffer exposed via
+                                        SensESP's config REST API, not a
+                                        WebSocket (see §4 for why)
   gateway.h/.cpp                          — SensESP app wiring: config
                                         items, sender instantiation, main
                                         event loop (equivalent to the
-                                        parent's nmea_gateway.h/.cpp)
+                                        parent's nmea_gateway.h/.cpp).
+                                        Fault indication (LED/SignalK
+                                        notification, SPEC §6) is not yet
+                                        implemented — see
+                                        docs/plans/gateway-wiring.md.
 test/
   test_hwt3100_parser/                    — Unity tests for
                                         ParseHWT3100Line(), run via the

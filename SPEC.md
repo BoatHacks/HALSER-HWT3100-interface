@@ -209,8 +209,17 @@ when tracking down wiring faults or a wrong baud rate.
 
 Requirements:
 
-- Shows incoming serial data close to real-time (streamed to the browser,
-  not polled/refreshed manually).
+- Shows recent incoming serial data — implemented as the last 30 raw
+  lines, refreshed whenever the browser reads the corresponding config
+  value (SensESP's config UI re-fetches periodically/on demand). This is
+  a revision from the original "streamed, not polled" requirement: a
+  working implementation-time investigation of SensESP 3.2.0 found no
+  public way to push data to the browser at all (no WebSocket support,
+  no custom-HTTP-handler extension point) — see ARCHITECTURE.md §2.5,
+  §4 for the finding, and docs/plans/gateway-wiring.md for the decision
+  to build this on SensESP's existing config REST API instead. Good
+  enough for the diagnostic use case (§8.1's purpose is confirming the
+  sensor is wired and talking, not a scrolling live feed).
 - **Read-only as a monitor**: the terminal view itself has no free-text
   send box and no code path for transmitting arbitrary bytes. It is a
   passive tap on the incoming stream (see ARCHITECTURE §2.1, §6). Sending
@@ -225,8 +234,13 @@ Requirements:
 ### 8.2 In-Place Calibration Commands
 
 The web UI exposes the HWT3100's own on-module magnetic-field calibration
-procedure as named actions — buttons/API calls for a fixed, known set of
-commands — not as free-text command entry.
+procedure as named actions for a fixed, known set of commands — not as
+free-text command entry. Implemented as three boolean config-toggle
+items (SensESP's config REST API has no "button" primitive — see §8.1's
+note on why this rides the config API rather than a dedicated UI
+control): setting one to true fires the corresponding command and it
+immediately resets itself to false. See ARCHITECTURE.md §2.6 for the
+mechanism and the accepted reboot-replay trade-off.
 
 The full set of relevant commands, from the HWT3100-TTL/232 manual §5.3.1
 (all plain ASCII text, terminated `\r\n`, all operate without leaving
@@ -354,6 +368,19 @@ Requirements:
   say persistence is automatic. Needs confirming during implementation
   (e.g. by power-cycling the module after calibrating and checking
   whether the calibration held).
-- N2K transmission rate for PGN 127250 — a specific interval (e.g.
-  100ms, matching the parent firmware's existing `N2kHeadingSender`) vs.
-  something else — to be settled in ARCHITECTURE.md.
+- **Fault indication (RGB LED + SignalK notification) for stale sensor
+  data is not yet implemented** — §6/§9.1 describe it as an MVP
+  requirement, but gateway.cpp currently only initializes the LED
+  without driving it, and no SignalK notification is sent. The N2K side
+  of §6 is already covered (§10: `ExpiringValue::to_n2k()` sends
+  `N2kDoubleNA` when stale, as a side effect of reusing the parent's
+  pattern). Needs its own small design pass (LED color/pattern, SignalK
+  notification path/format) — see docs/plans/gateway-wiring.md.
+
+Resolved during implementation (see ARCHITECTURE.md and
+docs/plans/gateway-wiring.md for detail): N2K transmission rate for PGN
+127250 (100ms, matching the parent firmware's `N2kHeadingSender`
+interval); serial-log transport (SensESP's config REST API, not a
+WebSocket — SensESP 3.2.0 has no public extension point for custom HTTP
+endpoints at all); calibration-command UI mechanism (boolean
+config-toggle triggers, not dedicated buttons — same underlying reason).
