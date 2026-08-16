@@ -99,13 +99,39 @@ jobs:
           BUILD_DIR=.pio/build/halser
           ASSET="halser-hwt3100-interface-${{ github.event.inputs.version }}-merged.bin"
           echo "ASSET_PATH=$BUILD_DIR/$ASSET" >> "$GITHUB_ENV"
+          # Flash mode/freq/size must match what was actually compiled into
+          # bootloader.bin/firmware.bin (read from the image header itself,
+          # not the board JSON's declared "qio" - the esp32-c3-devkitm-1
+          # board actually builds/boots as DIO). merge_bin rewrites these
+          # fields unconditionally, so passing the wrong mode here silently
+          # produces a binary that hangs in a TG0WDT_SYS_RST boot loop.
+          FLASH_MODE_BYTE=$(python3 -c "print(open('$BUILD_DIR/bootloader.bin','rb').read(3)[2])")
+          case "$FLASH_MODE_BYTE" in
+            0) FLASH_MODE=qio ;;
+            1) FLASH_MODE=qout ;;
+            2) FLASH_MODE=dio ;;
+            3) FLASH_MODE=dout ;;
+            *) echo "::error::Unrecognized flash mode byte $FLASH_MODE_BYTE in bootloader.bin"; exit 1 ;;
+          esac
+          echo "Detected flash mode: $FLASH_MODE (byte $FLASH_MODE_BYTE)"
           ESPTOOL="$(find ~/.platformio/packages/tool-esptoolpy -name esptool.py | head -1)"
           python3 "$ESPTOOL" --chip esp32c3 merge_bin \
             -o "$BUILD_DIR/$ASSET" \
-            --flash_mode qio --flash_freq 80m --flash_size 4MB \
+            --flash_mode "$FLASH_MODE" --flash_freq 80m --flash_size 4MB \
             0x0000 "$BUILD_DIR/bootloader.bin" \
             0x8000 "$BUILD_DIR/partitions.bin" \
             0x10000 "$BUILD_DIR/firmware.bin"
+
+      - name: Build OTA-flashable firmware image
+        run: |
+          # SensESP's built-in OTA (ArduinoOTA, see enable_ota() in
+          # gateway.cpp) only flashes the app partition - it must NOT
+          # include the bootloader/partition table, unlike the merged
+          # image above which is for the initial USB flash.
+          BUILD_DIR=.pio/build/halser
+          OTA_ASSET="halser-hwt3100-interface-${{ github.event.inputs.version }}-ota.bin"
+          echo "OTA_ASSET_PATH=$BUILD_DIR/$OTA_ASSET" >> "$GITHUB_ENV"
+          cp "$BUILD_DIR/firmware.bin" "$BUILD_DIR/$OTA_ASSET"
 
       - name: Tag release
         run: |
@@ -124,4 +150,5 @@ jobs:
           gh release create "$TAG" \
             --title "$TAG" \
             --notes "$NOTES" \
-            "$ASSET_PATH"
+            "$ASSET_PATH" \
+            "$OTA_ASSET_PATH"
