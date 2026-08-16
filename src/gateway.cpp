@@ -11,6 +11,7 @@
 #include "hwt3100_types.h"
 #include "n2k_senders.h"
 #include "rate_of_turn.h"
+#include "sensesp/signalk/signalk_metadata.h"
 #include "sensesp/signalk/signalk_output.h"
 #include "sensesp/system/lambda_consumer.h"
 #include "sensesp/system/observablevalue.h"
@@ -18,7 +19,6 @@
 #include "sensesp/ui/config_item.h"
 #include "sensesp_app_builder.h"
 #include "serial_terminal.h"
-#include "signalk_notification.h"
 
 using namespace sensesp;
 
@@ -31,6 +31,14 @@ tNMEA2000* nmea2000 = nullptr;
 // actual helm/autopilot's sensitivity requirements).
 constexpr unsigned long kRateOfTurnWindowMs = 2000;
 constexpr unsigned long kRateOfTurnMinSpanMs = 500;
+
+constexpr float kPi = 3.14159265358979323846f;
+constexpr float kDegreesToRadians = kPi / 180.0f;
+
+// Matches N2kHeadingSender's ExpiringValue expiry (SPEC.md §6, §10): the
+// SignalK meta.timeout advisory should agree with when N2K actually
+// starts sending "not available."
+constexpr float kHeadingTimeoutSeconds = 5.0f;
 
 /// Used for SetDeviceInformation()'s "unique number" — deliberately NOT
 /// the Precision-9 reference's hardcoded value (SPEC.md §10), so that
@@ -154,36 +162,27 @@ void run_hwt3100_gateway() {
   auto heading_sender = new halser::N2kHeadingSender(nmea2000);
   auto rate_of_turn_sender = new halser::N2kRateOfTurnSender(nmea2000);
 
-  // Fault indication (SPEC.md §6): SignalK-notification-only, since the
-  // RGB LED is already claimed by SensESP (see above). "alarm" when the
-  // HWT3100 has gone stale, "normal" otherwise. Nested under the related
-  // data path per SignalK notification convention.
-  auto heading_fault_notification =
-      new halser::SKNotification("notifications.navigation.headingMagnetic");
-
-  event_loop()->onRepeat(100, [heading_sender, rate_of_turn_sender,
-                                heading_fault_notification, n2k_enabled,
+  event_loop()->onRepeat(100, [heading_sender, rate_of_turn_sender, n2k_enabled,
                                 n2k_heading_pgn_enabled,
-                                n2k_rate_of_turn_pgn_enabled,
-                                signalk_enabled]() {
+                                n2k_rate_of_turn_pgn_enabled]() {
     if (n2k_enabled->get() && n2k_heading_pgn_enabled->get()) {
       heading_sender->send();
     }
     if (n2k_enabled->get() && n2k_rate_of_turn_pgn_enabled->get()) {
       rate_of_turn_sender->send();
     }
-
-    if (signalk_enabled->get() && !heading_sender->heading_.is_valid()) {
-      heading_fault_notification->Set("alarm", "HWT3100 heading data is stale");
-    } else {
-      heading_fault_notification->Set("normal", "");
-    }
   });
 
   // --- SignalK output ---
 
-  auto sk_heading_output =
-      new SKOutputFloat("navigation.headingMagnetic", "/signalk/heading_path");
+  // Fault indication (SPEC.md §6) is meta.timeout, not an active
+  // notification — see docs/plans/fault-indication.md for why. Any
+  // SignalK-spec-aware consumer computes staleness itself from this
+  // advisory value and the delta's own timestamp; this firmware doesn't
+  // have to declare an alarm state at all.
+  auto sk_heading_output = new SKOutputFloat(
+      "navigation.headingMagnetic", "/signalk/heading_path",
+      new SKMetadata("rad", "", "", "", kHeadingTimeoutSeconds));
 
   // --- HWT3100 serial I/O, calibration offset, and dispatch to outputs ---
 
@@ -210,9 +209,16 @@ void run_hwt3100_gateway() {
       [=](HeadingReading reading) {
         HeadingReading corrected =
             halser::ApplyCalibrationOffset(reading, heading_offset->get());
-        heading_sender->heading_.update(corrected.heading);
+        // HeadingReading.heading is degrees throughout this firmware's
+        // internal pipeline (matches the HWT3100's own wire format and
+        // RateOfTurnEstimator's wraparound math) — both N2K's
+        // SetN2kPGN127250 and SignalK's navigation.headingMagnetic
+        // require radians, so the conversion happens right at each
+        // output boundary, not upstream.
+        float heading_rad = corrected.heading * kDegreesToRadians;
+        heading_sender->heading_.update(heading_rad);
         if (signalk_enabled->get()) {
-          sk_heading_output->set(corrected.heading);
+          sk_heading_output->set(heading_rad);
         }
 
         rate_of_turn_estimator->AddSample(corrected.heading, corrected.timestamp);

@@ -45,10 +45,10 @@ HWT3100-TTL  ◄─────────────────────�
                                                          not free text)
 ```
 
-Not pictured above (to keep the diagram readable): the same 100ms loop
-driving the N2K senders also updates a `SKNotification` (2.8) —
-`notifications.navigation.headingMagnetic` — from `N2kHeadingSender`'s
-own staleness tracking. No RGB LED involvement anywhere in this
+Not pictured above (to keep the diagram readable): the SignalK delta
+sender's `meta.timeout` (2.7) is set once at construction, not updated
+per-tick like the N2K senders — SignalK staleness is advisory metadata,
+not an active per-cycle signal. No RGB LED involvement anywhere in this
 firmware's own code (2.9) — SensESP already owns the board's one LED.
 
 Single ESP32-C3 firmware, no boot-mode routing (unlike the parent
@@ -238,30 +238,23 @@ this component's.
 Publishes `navigation.headingMagnetic` via SensESP's existing
 SignalK/WiFi transport, gated by the SignalK master enable flag (2.6).
 Uses the same corrected `HeadingReading` as the N2K sender (2.4) — single
-source of truth, per SPEC §2. Raw magnetic field is not published here
-(SPEC §5.2, §10) — it's diagnostic-only, visible via 2.5.
+source of truth, per SPEC §2. Radians, converted from the firmware's
+internal degrees representation right at this boundary (SPEC §3, §5.2 —
+an earlier version of this sender sent raw degrees, a real bug caught
+while wiring up the `meta.timeout` units field below). Raw magnetic
+field is not published here (SPEC §5.2, §10) — it's diagnostic-only,
+visible via 2.5.
 
-### 2.8 Fault Notification (`signalk_notification.h`, class `SKNotification`)
-
-Implements SPEC §6's stale-data fault indication — SignalK-notification
-only, no LED (2.9 explains why). SensESP 3.2.0 has no built-in
-"send a notification" helper (only `SKPrefixListener`, for *receiving*
-`notifications.*`), so `SKNotification` subclasses `sensesp::SKEmitter`
-directly — verified against the actual vendored source that this is the
-same generic extension point `sensesp::SKOutput<T>` itself uses:
-`SKDeltaQueue` unconditionally sweeps `SKEmitter::get_sources()` and
-calls `as_signalk_json()` on each, so any registered `SKEmitter`
-subclass is picked up without needing to hook into anything else.
-`as_signalk_json()` builds `{"path": ..., "value": {"state": ...,
-"message": ...}}`, publishing to
-`notifications.navigation.headingMagnetic` (nested under the related
-data path, per SignalK convention). `Set()` is called from the same
-100ms periodic loop that drives the N2K senders (2.6), reading
-`N2kHeadingSender::heading_.is_valid()` as the staleness signal — one
-`ExpiringValue` already tracking exactly this, reused rather than
-duplicated. Gated by the SignalK master enable flag: when SignalK output
-is disabled, the notification is held at `"normal"` regardless of actual
-staleness (SPEC §10).
+Constructed with an `SKMetadata` carrying `units="rad"` and
+`timeout_=5.0` (matching `N2kHeadingSender`'s own `ExpiringValue`
+window) — this `timeout_` field is SPEC §6's entire staleness mechanism
+on the SignalK side. No separate fault-indication component exists:
+SensESP's `SKMetadata` already has a first-class `timeout_` field, so
+this is one constructor argument, not new code. (An earlier version of
+this architecture had a dedicated `SKNotification`/`SKEmitter` subclass
+sending an active `notifications.*` alarm; replaced once `meta.timeout`
+was confirmed as the SignalK-spec-defined mechanism for exactly this —
+SPEC §10 covers the trade-off.)
 
 ### 2.9 No Dedicated Fault LED
 
@@ -429,10 +422,6 @@ src/
                                         30-line ring buffer exposed via
                                         SensESP's config REST API, not a
                                         WebSocket (see §4 for why)
-  signalk_notification.h                  — SKNotification (2.8): custom
-                                        SKEmitter subclass for the
-                                        stale-data fault notification
-                                        (docs/plans/fault-indication.md)
   gateway.h/.cpp                          — SensESP app wiring: config
                                         items, sender instantiation, main
                                         event loop (equivalent to the

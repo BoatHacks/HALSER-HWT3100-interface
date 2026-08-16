@@ -148,7 +148,7 @@ it.
 
 | Field       | Type  | Notes                                              |
 |-------------|-------|-----------------------------------------------------|
-| heading     | float | Magnetic heading, degrees, 0–360, offset-corrected  |
+| heading     | float | Magnetic heading, **degrees**, 0–360, offset-corrected — this is the internal representation throughout the firmware's pipeline (matches the HWT3100's own wire format and the rate-of-turn math, §3). N2K and SignalK both require radians (§5.1, §5.2); that conversion happens once, at each output's boundary, not here. |
 | magX, magY, magZ | int | Raw magnetic field components, as reported by the module (diagnostic use — see §5, §10) |
 | timestamp   | uint  | Millis of last successful sensor read (for staleness) |
 
@@ -200,13 +200,16 @@ why, and §10 for exactly which fields are cloned vs. derived locally.
 
 Two PGNs are implemented:
 
-- **PGN 127250 — Vessel Heading**: real data, unchanged from before this
-  revision.
+- **PGN 127250 — Vessel Heading**: real data. Radians, per
+  `SetN2kPGN127250`'s documented parameter — converted from the
+  firmware's internal degrees representation (§3) at this output
+  boundary, same as SignalK's (§5.2).
 - **PGN 127251 — Rate of Turn**: *computed*, not sensed — the HWT3100
   has no gyroscope, so this is derived from a sliding window of recent
   heading readings (§1.3, §3). This is genuinely-derived data (the
   actual rate the heading has been changing), not a fabricated/NA
-  placeholder sent only to pad out the PGN fingerprint.
+  placeholder sent only to pad out the PGN fingerprint. Already in
+  radians/second natively — no conversion needed at this boundary.
 
 **PGN 127257 (Attitude) remains not implemented** — that decision doesn't
 change here. The Precision-9 reference implementation sends it (it reads
@@ -227,28 +230,35 @@ encoding are worked out in ARCHITECTURE.md.
 
 ### 5.2 SignalK Output
 
-Heading delta published as `navigation.headingMagnetic`, consistent with
-the SignalK spec's navigation group. Raw magnetic field readings are not
-published as SignalK deltas in MVP — there's no established SignalK path
-for a raw 3-axis magnetic field vector on a vessel, and no known
-consumer for one (§10 Design Decisions); they remain visible only via the
-serial terminal (§8.1) and internally for the calibration workflow (§8.2).
+Heading delta published as `navigation.headingMagnetic`, in **radians**
+per the SignalK spec (all SignalK angles are SI units — degrees is not
+valid here, unlike the firmware's internal representation, §3). Raw
+magnetic field readings are not published as SignalK deltas in MVP —
+there's no established SignalK path for a raw 3-axis magnetic field
+vector on a vessel, and no known consumer for one (§10 Design
+Decisions); they remain visible only via the serial terminal (§8.1) and
+internally for the calibration workflow (§8.2).
 
-When data is stale, the firmware should not keep republishing the last
-value silently — see §6 (Fault Handling) for how staleness is surfaced.
+Staleness is surfaced via `meta.timeout` (§6), a spec-defined advisory
+value published once as metadata — not a per-update flag on the delta
+itself, and not an active alarm/notification.
 
 ## 6. Fault Handling / Persistence
 
-- **Stale sensor data**: if the HWT3100 stops producing readings within
-  the expected interval, the firmware actively signals a fault rather
-  than going silent — via a SignalK notification
-  (`notifications.navigation.headingMagnetic`, state `"alarm"`) and by
-  transmitting N2K "not available" values on PGN 127250/127251 rather
-  than omitting them (`ExpiringValue`, §10). **No dedicated RGB LED
-  fault color** — an earlier draft of this section required one, but
-  implementation found the LED is already fully claimed by SensESP's own
-  connection-status display with no way to share it; see §10 for the
-  design decision.
+- **Stale sensor data**: on the N2K side, the firmware transmits "not
+  available" values on PGN 127250/127251 rather than omitting them
+  (`ExpiringValue`, §10) — an active signal, not silence. On the
+  SignalK side, staleness is **not** an active alarm — the
+  `navigation.headingMagnetic` output carries `meta.timeout` (5 seconds,
+  matching `ExpiringValue`'s own expiry window), the SignalK-spec-defined
+  advisory mechanism for this (§5.2, §10): the firmware states how long a
+  value should be considered valid, and any spec-aware consumer computes
+  staleness itself from that plus the delta's own timestamp. **No
+  dedicated RGB LED fault color, and no SignalK notification** — both
+  were in earlier drafts of this section; see §10 for why each was
+  dropped (LED: already fully claimed by SensESP with no way to share
+  it; notification: `meta.timeout` is the more spec-idiomatic mechanism,
+  chosen deliberately over an active alarm).
 - **Persistence**: the calibration offset (heading) and WiFi/N2K
   enable-disable configuration must survive a restart. Live sensor
   readings are ephemeral and are not persisted.
@@ -356,8 +366,9 @@ Requirements:
   §1.2, §5.1, §10), not a generic/custom device identity.
 - Transmit heading via SignalK deltas (`navigation.headingMagnetic`,
   SensESP/WiFi), independently toggleable.
-- Detect stale sensor data and actively indicate the fault (SignalK
-  notification + N2K "not available" values — no LED, see §6, §10).
+- Detect stale sensor data and indicate it: N2K "not available" values
+  (active) + SignalK `meta.timeout` (advisory, spec-idiomatic) — no LED,
+  no active SignalK notification, see §6, §10.
 - Live serial terminal in the web UI showing raw HWT3100 serial traffic
   (§8.1).
 - In-place calibration commands: named, allowlisted `AT+CALI` actions to
@@ -478,13 +489,28 @@ Requirements:
   SensESP's free WiFi/WebSocket status blinking, and this was a closer
   call than it might sound — the user picked keeping SensESP's LED).
   Fault indication is SignalK-notification-only as a result.
-- **The SignalK notification is a custom `SKEmitter` subclass, not a
-  SensESP helper** — SensESP 3.2.0 has no built-in "send a notification"
-  function (only `SKPrefixListener`, for *receiving* `notifications.*`).
-  Verified the underlying delta-sending mechanism is generic (any
-  registered `SKEmitter` gets swept and its `as_signalk_json()` called),
-  the same mechanism `SKOutput<T>` itself uses — so subclassing directly
-  is the supported extension point, not a workaround bolted onto one.
+- **SignalK staleness is `meta.timeout`, not an active notification** —
+  an earlier draft implemented an active `notifications.*` alarm via a
+  custom `SKEmitter` subclass (verified against SensESP's real sweep
+  mechanism, not guessed). Replaced it after checking the SignalK spec
+  directly: `meta.timeout` is the spec-defined, purpose-built mechanism
+  for exactly this ("tell the consumer how long to consider the value
+  valid"), published once as metadata rather than requiring the device
+  to actively track and declare an alarm state. Trade-off accepted
+  knowingly: per an open SignalK server RFC, `meta.timeout` isn't
+  universally enforced by consumers today, so this is a bet on
+  spec-correctness over guaranteed-actionable-everywhere. SensESP's
+  `SKMetadata` already has a first-class `timeout_` field — no custom
+  code needed, unlike the notification it replaced.
+- **Fixed a real degrees/radians bug found while wiring up
+  `meta.timeout`'s units field** — `navigation.headingMagnetic` and
+  `SetN2kPGN127250`'s `Heading` parameter both require radians; this
+  firmware's `HeadingReading.heading` is degrees throughout its internal
+  pipeline (§3), and both N2K and SignalK output had been sending raw
+  degrees, uncoverted, since the outputs were first wired up. Caught only
+  because attaching a `"rad"` units label to a value that was actually in
+  degrees would have been actively wrong, not just incomplete — a
+  reminder that adding metadata is itself a form of verification.
 
 ## 11. Open Questions
 
@@ -500,11 +526,12 @@ Requirements:
   say persistence is automatic. Needs confirming during implementation
   (e.g. by power-cycling the module after calibrating and checking
   whether the calibration held).
-- The SignalK notification's JSON shape (`{path, value: {state,
-  message}}`) follows the documented SignalK notification schema, but
-  was never verified against a live SignalK server — no server was
-  available in this environment. Worth confirming a real server accepts
-  and displays it as expected before relying on it operationally.
+- `meta.timeout`'s actual effect was never verified against a live
+  SignalK server or a real consumer app — no server was available in
+  this environment, and (per the SignalK server RFC noted in §10)
+  enforcement isn't universal across the ecosystem regardless. Worth
+  confirming what the intended consumer(s) for a given install actually
+  do with it before relying on this as the only staleness signal.
 - The rate-of-turn sliding window length and minimum sample-span (chosen
   in ARCHITECTURE.md §2 as reasonable defaults, not derived from a real
   helm/autopilot's actual sensitivity requirements) may need tuning once
@@ -519,6 +546,8 @@ the parent firmware's `N2kHeadingSender` interval); serial-log transport
 (SensESP's config REST API, not a WebSocket — SensESP 3.2.0 has no public
 extension point for custom HTTP endpoints at all); calibration-command UI
 mechanism (boolean config-toggle triggers, not dedicated buttons — same
-underlying reason); fault-indication mechanism (SignalK notification via
-a custom `SKEmitter` subclass, no LED — SensESP already owns the only
-RGB LED with no sharing hook).
+underlying reason); fault-indication mechanism (SignalK `meta.timeout`,
+no active notification, no LED — SensESP already owns the only RGB LED
+with no sharing hook); a degrees/radians unit bug in both N2K and
+SignalK heading output, found and fixed while wiring up `meta.timeout`'s
+units field.
