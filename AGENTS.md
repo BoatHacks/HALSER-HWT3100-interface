@@ -2,7 +2,22 @@
 
 ## Project Overview
 
-HALSER default firmware — a unified ESP32-C3 binary that serves as both the NMEA 0183→N2K gateway (normal operation) and the production test handler (test jig mode).
+HALSER-HWT3100-interface — ESP32-C3 firmware that reads magnetic heading
+from a WitMotion HWT3100-TTL/232 fluxgate compass over serial, and
+republishes it as an NMEA 2000 message and a SignalK delta. Read
+[SPEC.md](SPEC.md) and [ARCHITECTURE.md](ARCHITECTURE.md) before making
+changes — this document is a quick-reference summary of those, not a
+replacement for them.
+
+**Hardware limitation, not a bug**: the HWT3100-TTL/232 is a compass, not
+an IMU — it has no accelerometer/gyroscope and cannot produce pitch/roll.
+Don't add attitude/PGN 127257 support expecting it to work; see SPEC.md
+§1.2 and §9.3.
+
+**Hard safety constraint**: never implement `AT+MODE` in any form. See
+SPEC.md §1.2/§2 and ARCHITECTURE.md §6 for why — a real unit has been
+bricked by this command, and this firmware has no functional need for
+Modbus mode (ASCII mode already provides everything required).
 
 ## Build Commands
 
@@ -19,51 +34,46 @@ pio device monitor
 
 ## Architecture
 
-### Boot Routing
+See ARCHITECTURE.md for the full component breakdown. Summary:
 
-GPIO 0 is checked at startup:
-- **HIGH** (test jig drives it) → test command mode over USB CDC serial
-- **LOW** (standalone operation) → NMEA 0183→N2K gateway with full SensESP
+### Data Flow
+
+```
+UART1 (9600 baud default, GPIO 3 RX)
+  → HWT3100 ASCII line parser ("Magx=<n>,y=<n>,z=<n>,w=<n.n>\r\n")
+  → HeadingReading (heading, magX/Y/Z, timestamp)
+  → Calibration offset applied
+  → N2K sender (PGN 127250 only) + SignalK delta sender, independently
+    toggleable
+```
+
+Calibration commands (`AT+CALI=0/1/2`) are sent through a separate,
+allowlisted write path — see ARCHITECTURE.md §2.1, §2.2, §6.
 
 ### Source Layout
 
-- `src/main.cpp` — Boot routing (GPIO 0 check)
-- `src/halser_const.h` — Pin assignments and constants
-- `src/test_mode.h/.cpp` — Production test command handler (PING, CAN_TEST, serial loopback, GPIO, HALL_TEST)
-- `src/nmea_gateway.h/.cpp` — SensESP application: NMEA 0183 parsing, N2K transmission, WiFi/web UI
-- `src/n2k_senders.h` — N2K message senders with value expiry
-
-### Data Flow (Gateway Mode)
-
-```
-UART1 (4800 baud, GPIO 3 RX)
-  → NMEA0183IOTask (dedicated FreeRTOS task)
-  → Sentence parsers (GGA, RMC, VTG, HDG, VHW, DPT, MWV)
-  → LambdaConsumer callbacks → ExpiringValue updates
-  → Periodic N2K message senders
-  → tNMEA2000_esp32 (TWAI, GPIO 4 TX / GPIO 5 RX)
-```
+- `src/main.cpp` — entry point
+- `src/halser_const.h` — pin assignments and constants
+- `src/gateway.h/.cpp` — SensESP application wiring (not yet implemented
+  — see IMPLEMENTATION_CHECKLIST.md)
+- Planned (see ARCHITECTURE.md §7 for the full file structure):
+  `hwt3100_serial.h/.cpp`, `hwt3100_calibration_commands.h/.cpp`,
+  `calibration_offset.h`, `n2k_senders.h`, `serial_terminal.h/.cpp`
 
 ### Hardware Pin Assignments
 
 | Pin | Function |
 |-----|----------|
-| GPIO 0 | Test jig indicator |
-| GPIO 1 | Hall effect sensor |
-| GPIO 2 | UART1 TX |
-| GPIO 3 | UART1 RX |
+| GPIO 2 | UART1 TX (to HWT3100, via HALSER's UART terminal block, jumper on "U") |
+| GPIO 3 | UART1 RX (from HWT3100) |
 | GPIO 4 | CAN TX |
 | GPIO 5 | CAN RX |
-| GPIO 6 | I2C SDA |
-| GPIO 7 | I2C SCL |
 | GPIO 8 | RGB LED (SK6805) |
 | GPIO 9 | Button |
-| GPIO 10 | 1-Wire |
 
 ## Dependencies
 
 - SensESP 3.2.0 — IoT framework (WiFi, web UI, Signal K)
-- SensESP/NMEA0183 — NMEA 0183 sentence parsing
 - NMEA2000-library — NMEA 2000 message handling
 - NMEA2000_twai — ESP32 TWAI (CAN) driver
 - Adafruit NeoPixel — RGB LED control
