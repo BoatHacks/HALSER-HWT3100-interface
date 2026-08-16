@@ -350,6 +350,30 @@ Requirements:
   read-only; calibration commands go through their own named-action UI,
   so the two don't get conflated into one general "send anything" box.
 
+### 8.3 MFD-Triggered Calibration (N2K)
+
+In addition to the web UI (§8.2), a compatible chartplotter/MFD can
+start and stop the same on-module calibration over the N2K bus — user
+requirement, matching how `htool/ESP32_Precision-9_compass_CMPS14`
+(the same reference used for the Precision-9 device identity, §1.2,
+§5.1) does it for its own sensor.
+
+**This uses PGN 130850 (command) / PGN 130851 (acknowledgment), an
+undocumented, reverse-engineered proprietary Navico/Simnet message —
+not a published NMEA 2000 specification.** Everything about its byte
+layout comes from reading the reference implementation's source, not
+from an official spec, and none of it has been verified against real
+B&G/Simrad MFD hardware or a live N2K bus (§10, §11). This is a
+best-effort compatibility port, offered because the user explicitly
+requested feature parity with that reference project — not a claim that
+it's guaranteed to work with a real MFD.
+
+The MFD-triggered path dispatches to the exact same
+`CalibrationCommandHandler` (§8.2, ARCHITECTURE.md §2.2) the web UI
+uses — same allowlisted write chokepoint, same two-command scope (start,
+stop; no MFD-triggered "clear," matching the reference implementation,
+which has none either).
+
 ## 9. MVP Scope
 
 ### 9.1 MVP Features
@@ -373,6 +397,8 @@ Requirements:
   (§8.1).
 - In-place calibration commands: named, allowlisted `AT+CALI` actions to
   drive the HWT3100's own on-module magnetic-field calibration (§8.2).
+- MFD-triggered calibration start/stop over N2K (§8.3), reverse-engineered
+  proprietary protocol, unverified against real hardware.
 - OTA firmware upgrades (reusing SensESP's built-in OTA support).
 
 ### 9.2 Post-MVP / Deferred
@@ -511,9 +537,35 @@ Requirements:
   because attaching a `"rad"` units label to a value that was actually in
   degrees would have been actively wrong, not just incomplete — a
   reminder that adding metadata is itself a form of verification.
+- **MFD calibration (§8.3) copies the reference implementation's
+  `DEVICE_ID=24` verbatim, despite not knowing what it represents** —
+  user's explicit choice, over making it configurable or dropping the
+  check entirely. Rejected making it configurable-with-unknown-default
+  (adds a setting nobody yet knows the correct value for) and rejected
+  dropping the check (if it does mean something like an N2K device
+  instance, ignoring it could mean responding to a command meant for a
+  different device on a multi-compass bus). Copying the reference's
+  exact value is the most direct interpretation of "match the reference
+  implementation."
+- **MFD calibration dispatches through the existing
+  `CalibrationCommandHandler`, not a separate write path** — this N2K
+  command path and the web UI's config-toggle path both ultimately need
+  to call `HWT3100SerialIO::SendCommand()`; giving the N2K handler its
+  own direct access would create a second place capable of reaching that
+  chokepoint, undermining the "one auditable caller" property established
+  in §10 for the web UI path. Reusing the same handler keeps that
+  property intact regardless of how many trigger sources exist.
 
 ## 11. Open Questions
 
+- **The entire PGN 130850/130851 MFD-calibration mechanism (§8.3) is
+  unverified against real hardware** — no B&G/Simrad MFD or live N2K bus
+  was available in this environment. The byte layout, `DEVICE_ID`'s true
+  meaning, the priority value used for the acknowledgment, and even
+  whether a real MFD's calibration screen actually sends this exact PGN
+  in this exact shape all rest entirely on one third-party reference
+  implementation's reverse-engineering. Needs real-hardware testing
+  before relying on this operationally.
 - Exact field ordering/formatting edge cases in the HWT3100's ASCII
   output line (negative-number formatting, whether the module always
   sends all four fields in the same order, behavior at start-up before

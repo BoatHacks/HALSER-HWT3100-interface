@@ -9,6 +9,7 @@
 #include "hwt3100_calibration_commands.h"
 #include "hwt3100_serial.h"
 #include "hwt3100_types.h"
+#include "mfd_calibration_bridge.h"
 #include "n2k_senders.h"
 #include "rate_of_turn.h"
 #include "sensesp/signalk/signalk_metadata.h"
@@ -236,6 +237,13 @@ void run_hwt3100_gateway() {
 
   auto calibration_commands =
       new halser::CalibrationCommandHandler(hwt3100_serial);
+
+  // Lets a compatible MFD start/stop calibration over the N2K bus, the
+  // same way htool/ESP32_Precision-9_compass_CMPS14 does (SPEC.md §8.2,
+  // §10) — reverse-engineered proprietary protocol, unverified against
+  // real hardware; see docs/plans/mfd-calibration.md. Self-attaches to
+  // nmea2000 via its tMsgHandler base constructor.
+  new halser::MfdCalibrationBridge(nmea2000, calibration_commands);
 
   auto start_calibration = std::make_shared<PersistingObservableValue<bool>>(
       false, "/hwt3100/calibration/start");

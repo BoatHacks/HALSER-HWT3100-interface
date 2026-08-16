@@ -120,14 +120,43 @@ touches `Serial1` directly. Two directions, both gated:
 
 ### 2.2 Calibration Command Handler (`hwt3100_calibration_commands.h/.cpp`)
 
-Receives named calibration actions from the web UI (three buttons: Start
-Calibration, End Calibration, Clear Calibration) and maps each to an
-`HWT3100Command` enum value, then calls `HWT3100SerialIO::SendCommand`
-(2.1). This is the *only* component with access to `SendCommand` — the
-serial terminal (2.5) is display-only and has no reference to it. Holding
-the write capability in one small, auditable component (rather than
-spreading "can write to the sensor" across the codebase) keeps the
-allowlist enforcement easy to verify by reading one file.
+Receives named calibration actions from two trigger sources — the web UI
+(three config toggles: Start, End, Clear) and the N2K bus, via
+`MfdCalibrationBridge` (2.2a) — and maps each to an `HWT3100Command`
+enum value, then calls `HWT3100SerialIO::SendCommand` (2.1). This is the
+*only* component with access to `SendCommand` — the serial terminal
+(2.5) is display-only and has no reference to it, and `MfdCalibrationBridge`
+reaches `SendCommand` only through this handler, not directly. Holding
+the write capability in one small, auditable component regardless of
+how many trigger sources exist (rather than spreading "can write to the
+sensor" across the codebase) keeps the allowlist enforcement easy to
+verify by reading one file.
+
+### 2.2a MFD Calibration Bridge (`mfd_calibration_bridge.h/.cpp`)
+
+Lets a compatible MFD start/stop calibration over the N2K bus (SPEC
+§8.3), matching how `htool/ESP32_Precision-9_compass_CMPS14` does it —
+user-requested feature parity with the same reference project used for
+the Precision-9 device identity (2.6, §5). Subclasses
+`tNMEA2000::tMsgHandler` (chosen over the library's alternative
+single-function-pointer `SetMsgHandler` API specifically to avoid
+routing through file-scope global state to reach
+`CalibrationCommandHandler`), filtered to PGN 130850 via the handler's
+own constructor argument, and self-attaches to the `tNMEA2000` instance
+it's constructed with.
+
+**PGN 130850/130851 is an undocumented, reverse-engineered proprietary
+Navico/Simnet message, not a published NMEA 2000 spec** — every byte
+offset, the `DEVICE_ID=24` comparison value, and the acknowledgment's
+exact payload come from reading the reference implementation's source,
+not an official specification, and none of it has been verified against
+real MFD hardware (SPEC §11). On a match (`Command1==24`,
+`Command4==18`), dispatches to `CalibrationCommandHandler::StartCalibration()`/
+`EndCalibration()` (2.2) — reusing the existing allowlisted chokepoint,
+not a second write path — then replies with a PGN 130851 acknowledgment
+built via `tN2kMsg::Init()`/`AddByte()` (fast-packet, >8 bytes; the
+NMEA2000-library already handles this transparently based on message
+length, the same way the parent firmware's PGN 129029 GNSS sender does).
 
 ### 2.3 Calibration Offset
 
@@ -232,6 +261,11 @@ because HWT3100 calibration commands are safe to resend, unlike
 `TaskQueueProducer`s (2.1) and the `SerialTerminal`/calibration-trigger
 config items; the actual command dispatch stays 2.2's responsibility, not
 this component's.
+
+`MfdCalibrationBridge` (2.2a) is a second trigger source for the same
+2.2 handler, constructed once after it — no config item of its own
+(SPEC §8.3), since it's triggered by N2K bus traffic, not a web UI
+action.
 
 ### 2.7 SignalK Delta Sender
 
@@ -405,6 +439,12 @@ src/
                                         component that calls it. Small
                                         enough to stay header-only (each
                                         method is one call through).
+  mfd_calibration_bridge.h/.cpp           — MfdCalibrationBridge (2.2a):
+                                        N2K PGN 130850/130851 handler,
+                                        reverse-engineered proprietary
+                                        protocol (docs/plans/mfd-calibration.md),
+                                        dispatches through 2.2, not a
+                                        second write path
   calibration_offset.h                    — heading offset application
                                         (2.3), a pure function
   rate_of_turn.h/.cpp                     — RateOfTurnEstimator (2.4a):
