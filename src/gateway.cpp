@@ -10,6 +10,7 @@
 #include "hwt3100_prate_command.h"
 #include "hwt3100_serial.h"
 #include "hwt3100_types.h"
+#include "hwt3100_uart_command.h"
 #include "mfd_calibration_bridge.h"
 #include "n2k_senders.h"
 #include "rate_of_turn.h"
@@ -41,6 +42,18 @@ constexpr float kDegreesToRadians = kPi / 180.0f;
 // SignalK meta.timeout advisory should agree with when N2K actually
 // starts sending "not available."
 constexpr float kHeadingTimeoutSeconds = 5.0f;
+
+// Baud auto-detection order and per-candidate timeout (SPEC.md §8.2c):
+// recommended rate first (fast path for an already-configured module),
+// then the module's factory default, then the fastest supported rate.
+// 1s/candidate is a reasonable guess at how long it takes to see at
+// least one full line at the module's documented output rates — not
+// derived from real-hardware timing (SPEC.md §11).
+constexpr int kBaudCandidates[] = {halser::kBaud115200, halser::kBaud9600,
+                                    halser::kBaud460800};
+constexpr size_t kNumBaudCandidates =
+    sizeof(kBaudCandidates) / sizeof(kBaudCandidates[0]);
+constexpr unsigned long kBaudDetectTimeoutMs = 1000;
 
 /// Used for SetDeviceInformation()'s "unique number" — deliberately NOT
 /// the Precision-9 reference's hardcoded value (SPEC.md §10), so that
@@ -121,6 +134,22 @@ void run_hwt3100_gateway() {
       ->set_config_schema(
           R"schema({"type":"object","properties":{"value":{"title":"Enabled","type":"boolean"}}})schema");
 
+  // Raw magnetic field as SignalK deltas (SPEC.md §5.2) — diagnostic
+  // data with no established SignalK path, so it's off by default and
+  // gated separately from signalk_enabled (both must be true to
+  // publish).
+  auto raw_mag_field_enabled = std::make_shared<PersistingObservableValue<bool>>(
+      false, "/signalk/raw_mag_field_enabled");
+  ConfigItem(raw_mag_field_enabled)
+      ->set_title("Enable Raw Magnetic Field SignalK Output")
+      ->set_description(
+          "Publishes sensors.hwt3100.magneticField.x/y/z -- raw, "
+          "uncalibrated sensor counts from the HWT3100 (SPEC.md §5.2). "
+          "Diagnostic-only; off by default.")
+      ->set_sort_order(121)
+      ->set_config_schema(
+          R"schema({"type":"object","properties":{"value":{"title":"Enabled","type":"boolean"}}})schema");
+
   auto heading_offset = std::make_shared<PersistingObservableValue<float>>(
       0.0f, "/calibration/heading_offset");
   ConfigItem(heading_offset)
@@ -171,6 +200,28 @@ void run_hwt3100_gateway() {
       ->set_sort_order(56)
       ->set_config_schema(
           R"schema({"type":"object","properties":{"value":{"title":"Rate (ms)","type":"integer","minimum":-1,"maximum":10000}}})schema");
+
+  // AT+UART (SPEC.md §8.2c): the UART baud rate itself, not just a
+  // module setting -- unlike output_filter/output_prate above, changing
+  // this also has to reconfigure this firmware's own Serial1, not just
+  // send a command. Starts unknown (halser::kBaudUnknown = -1); startup
+  // wiring below auto-detects it by trying candidate rates in turn
+  // rather than assuming, since a wrong assumption here means no data
+  // ever arrives at all (not just a suboptimal setting).
+  auto hwt3100_baud = std::make_shared<PersistingObservableValue<int>>(
+      halser::kBaudUnknown, "/hwt3100/baud");
+  ConfigItem(hwt3100_baud)
+      ->set_title("HWT3100 UART Baud Rate")
+      ->set_description(
+          "-1 = not yet known; auto-detected at boot by trying 115200 "
+          "(recommended), 9600 (factory default), then 460800 in turn. "
+          "Set to 9600, 115200, or 460800 to send AT+UART and switch the "
+          "module's baud live -- the firmware reconfigures its own UART "
+          "to match immediately after (values are snapped to the nearest "
+          "of these three).")
+      ->set_sort_order(58)
+      ->set_config_schema(
+          R"schema({"type":"object","properties":{"value":{"title":"Baud","type":"integer"}}})schema");
 
   // --- NMEA 2000 (CAN bus via TWAI) ---
 
@@ -234,6 +285,20 @@ void run_hwt3100_gateway() {
       "navigation.rateOfTurn", "/signalk/rate_of_turn_path",
       new SKMetadata("rad/s", "", "", "", kHeadingTimeoutSeconds));
 
+  // Raw magnetic field (SPEC.md §5.2): custom sensors.* paths, no
+  // established standard, no unit (the manual doesn't document a
+  // counts-to-µT conversion factor) — raw sensor counts as-is, same
+  // values already visible via the serial terminal (§8.1).
+  auto sk_mag_x_output = new SKOutputFloat(
+      "sensors.hwt3100.magneticField.x", "/signalk/mag_x_path",
+      new SKMetadata("", "", "", "", kHeadingTimeoutSeconds));
+  auto sk_mag_y_output = new SKOutputFloat(
+      "sensors.hwt3100.magneticField.y", "/signalk/mag_y_path",
+      new SKMetadata("", "", "", "", kHeadingTimeoutSeconds));
+  auto sk_mag_z_output = new SKOutputFloat(
+      "sensors.hwt3100.magneticField.z", "/signalk/mag_z_path",
+      new SKMetadata("", "", "", "", kHeadingTimeoutSeconds));
+
   // --- HWT3100 serial I/O, calibration offset, and dispatch to outputs ---
 
   auto heading_producer = new TaskQueueProducer<HeadingReading>(HeadingReading{});
@@ -294,11 +359,49 @@ void run_hwt3100_gateway() {
             sk_rate_of_turn_output->set(rate_of_turn);
           }
         }
+
+        if (signalk_enabled->get() && raw_mag_field_enabled->get()) {
+          sk_mag_x_output->set(static_cast<float>(corrected.mag_x));
+          sk_mag_y_output->set(static_cast<float>(corrected.mag_y));
+          sk_mag_z_output->set(static_cast<float>(corrected.mag_z));
+        }
       }));
 
   auto hwt3100_serial =
       new halser::HWT3100SerialIO(Serial1, heading_producer, raw_line_producer);
-  hwt3100_serial->Begin(kHWT3100DefaultBaud, kUART1RxPin, kUART1TxPin);
+
+  // Baud auto-detection (SPEC.md §8.2c): if the persisted baud is still
+  // unknown, try each candidate in turn (passive listening only, no
+  // AT+UART sent) and persist whichever one produces valid data. Must
+  // happen before Begin() starts the background read task, since
+  // DetectBaud() isn't safe to call concurrently with it. If nothing is
+  // found in this pass, don't persist a guess -- read at the
+  // recommended default for this boot and let the next boot retry
+  // detection fresh.
+  int startup_baud = kHWT3100DefaultBaud;
+  if (hwt3100_baud->get() == halser::kBaudUnknown) {
+    int detected = 0;
+    if (hwt3100_serial->DetectBaud(kBaudCandidates, kNumBaudCandidates,
+                                    kBaudDetectTimeoutMs, kUART1RxPin,
+                                    kUART1TxPin, &detected)) {
+      hwt3100_baud->set(detected);
+      startup_baud = detected;
+    }
+  } else {
+    startup_baud = hwt3100_baud->get();
+  }
+  hwt3100_serial->Begin(startup_baud, kUART1RxPin, kUART1TxPin);
+
+  // Runtime baud switching: only fires on an explicit config change
+  // *after* the wiring above, since it's attached after any startup
+  // hwt3100_baud->set() from auto-detection -- so discovering the
+  // module's existing rate never itself triggers an unwanted AT+UART
+  // command.
+  hwt3100_baud->connect_to(new LambdaConsumer<int>([hwt3100_serial](int value) {
+    if (value != halser::kBaudUnknown) {
+      hwt3100_serial->SetBaudRate(value, kUART1RxPin, kUART1TxPin);
+    }
+  }));
 
   // Re-apply the persisted AT+FILT setting on every boot (the module
   // can't report its current filter back to us) and again whenever the

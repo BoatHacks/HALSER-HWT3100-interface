@@ -9,6 +9,7 @@
 #include "hwt3100_filter_command.h"
 #include "hwt3100_parser.h"
 #include "hwt3100_prate_command.h"
+#include "hwt3100_uart_command.h"
 
 namespace halser {
 
@@ -76,6 +77,71 @@ void HWT3100SerialIO::SetOutputRate(int value) {
 }
 
 void HWT3100SerialIO::QueryOutputRate() { serial_.print("AT+PRATE=?\r\n"); }
+
+bool HWT3100SerialIO::DetectBaud(const int* candidate_bauds,
+                                  size_t num_candidates,
+                                  unsigned long per_baud_timeout_ms, int rx_pin,
+                                  int tx_pin, int* detected_baud) {
+  for (size_t i = 0; i < num_candidates; i++) {
+    int baud = candidate_bauds[i];
+    serial_.begin(baud, SERIAL_8N1, rx_pin, tx_pin);
+
+    char buf[HWT3100RawLine::kMaxLength];
+    size_t len = 0;
+    bool found = false;
+    unsigned long deadline = millis() + per_baud_timeout_ms;
+
+    while (!found && millis() < deadline) {
+      while (serial_.available()) {
+        char c = static_cast<char>(serial_.read());
+
+        if (c == '\r') continue;
+
+        if (c == '\n') {
+          buf[len] = '\0';
+          HeadingReading reading;
+          if (ParseHWT3100Line(buf, &reading)) {
+            found = true;
+            break;
+          }
+          len = 0;
+          continue;
+        }
+
+        if (len < sizeof(buf) - 1) {
+          buf[len++] = c;
+        } else {
+          len = 0;
+        }
+      }
+      if (!found) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+      }
+    }
+
+    serial_.end();
+
+    if (found) {
+      *detected_baud = baud;
+      return true;
+    }
+  }
+  return false;
+}
+
+int HWT3100SerialIO::SetBaudRate(int requested_baud, int rx_pin, int tx_pin) {
+  // Settle delay between sending AT+UART and reconfiguring our own
+  // side, chosen as a reasonable fixed value (SPEC.md §11 — the manual
+  // doesn't document a timing spec for this transition).
+  constexpr unsigned long kBaudSwitchSettleMs = 200;
+
+  char buf[24];
+  int actual_baud = FormatUartCommand(requested_baud, buf, sizeof(buf));
+  serial_.print(buf);
+  delay(kBaudSwitchSettleMs);
+  serial_.begin(actual_baud, SERIAL_8N1, rx_pin, tx_pin);
+  return actual_baud;
+}
 
 void HWT3100SerialIO::ReadTaskTrampoline(void* arg) {
   static_cast<HWT3100SerialIO*>(arg)->ReadTaskLoop();

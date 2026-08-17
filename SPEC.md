@@ -60,18 +60,14 @@ manual and the vendor's own Arduino SDK example (`wit_c_sdk.c`):
 > terminal block doesn't support (SPEC.md §4, and the wiring guidance
 > that follows this note).
 
-> **⚠️ Required pre-wiring setup:** before connecting the module to
-> HALSER, it must be reconfigured from its factory-default 9600 baud to
-> **115200 baud**, by sending `AT+UART=1` while the module is connected
-> to a PC/USB-TTL adapter at its *current* (default, 9600) baud rate.
-> This is a one-time manual step done outside this firmware, and it must
-> happen *before* wiring to HALSER — the firmware itself talks to the
-> module at 115200 only (`kHWT3100DefaultBaud`, halser_const.h) and has
-> no way to detect or reconfigure a module still sitting at 9600 (§9.2,
-> "auto-detection... deferred"). Getting this step wrong looks like "no
-> data ever arrives," not a crash — there's nothing in the serial
-> terminal (§8.1) to debug against if the module is still on the wrong
-> baud, since HALSER's UART won't even frame the bytes correctly.
+> **⚠️ Recommended pre-wiring setup:** the module ships at 9600 baud;
+> **115200 is recommended** for headroom with `AT+FILT`/`AT+PRATE`
+> traffic. As of §8.2c, the firmware auto-detects whichever baud the
+> module is actually on at boot (trying 115200 first, then 9600, then
+> 460800) and can switch it live via config — so pre-configuring
+> `AT+UART=1` on a PC/USB-TTL adapter before wiring to HALSER is no
+> longer *required*, just a way to skip the extra detection latency on
+> first boot (§8.2c covers the actual timing cost).
 
 > **⚠️ Hardware hazard:** sending `AT+MODE=1` switches the module out of
 > ASCII mode into Modbus mode. Per a firsthand report, this has bricked a
@@ -268,12 +264,25 @@ per the SignalK spec (all SignalK angles are SI units — degrees is not
 valid here, unlike the firmware's internal representation, §3). Rate of
 turn is published as `navigation.rateOfTurn`, also a standard SignalK
 key (rad/s, positive = starboard — same sign convention as PGN 127251,
-§5.1), sourced from the same `RateOfTurnEstimator` output. Raw
-magnetic field readings are not published as SignalK deltas in MVP —
-there's no established SignalK path for a raw 3-axis magnetic field
-vector on a vessel, and no known consumer for one (§10 Design
-Decisions); they remain visible only via the serial terminal (§8.1) and
-internally for the calibration workflow (§8.2).
+§5.1), sourced from the same `RateOfTurnEstimator` output.
+
+Raw magnetic field is published as three independently-toggleable
+SignalK deltas: `sensors.hwt3100.magneticField.x/y/z`. There's no
+established standard SignalK path for a raw 3-axis magnetic field
+vector on a vessel (unlike heading/rate of turn, which have
+spec-defined `navigation.*` keys) — this is a custom path under the
+`sensors.*` namespace SignalK reserves for exactly this kind of
+non-standard sensor data. Values are the module's raw, uncalibrated
+sensor counts (same `mag_x/y/z` fields already visible via the serial
+terminal, §8.1) — no unit is published in `SKMetadata` for them, since
+the HWT3100 manual doesn't document a counts-to-µT conversion factor.
+No corresponding N2K message was added: there is no standard PGN for
+raw magnetometer data, and inventing a proprietary one would have no
+real consumer on the bus (unlike PGN 130850/130851 in §8.3, which
+exists because a real, if reverse-engineered, MFD protocol to
+interoperate with already exists). Gated behind both the SignalK
+master enable flag (§7) and its own dedicated toggle, off by default —
+diagnostic data, not something every install needs streamed.
 
 Staleness is surfaced via `meta.timeout` (§6), a spec-defined advisory
 value published once as metadata — not a per-update flag on the delta
@@ -467,6 +476,51 @@ Requirements:
   read-only; calibration commands go through their own named-action UI,
   so the two don't get conflated into one general "send anything" box.
 
+### 8.2c Baud Rate: Auto-Detection and Runtime Switching (`AT+UART`)
+
+Per the manual's AT-command table: `AT+UART=0/1/2` sets the module to
+9600/115200/460800 baud respectively, replying `OK`. Two related
+capabilities, combined into one persisted config value rather than
+two separate features, because they share the same underlying state
+(what baud are the firmware and module actually speaking):
+
+**Auto-detection.** The persisted value starts unknown
+(`halser::kBaudUnknown = -1`, same sentinel pattern as §8.2b's output
+rate). At boot, if still unknown, the firmware tries candidate bauds
+in order — **115200 (recommended), 9600 (factory default), 460800**
+— opening `Serial1` at each and listening up to a fixed timeout for at
+least one line that parses as valid HWT3100 output (`ParseHWT3100Line`,
+§3). The first candidate that produces a valid line is adopted: the
+value is persisted (so later boots skip straight to it) and the read
+task starts communicating at that rate. No `AT+UART` command is sent
+during detection — this is passive listening, not reconfiguration; the
+firmware is discovering what the module already is, not changing it.
+If none of the candidates work within their timeouts, detection fails
+for this boot: the firmware falls back to reading at the recommended
+115200 without persisting a value, so the next boot retries detection
+fresh rather than getting stuck on a guess.
+
+**Runtime switching.** Once a baud is known (whether learned via
+detection or set explicitly), changing the persisted value through the
+config UI to a different one of the three supported rates sends
+`AT+UART=<n>` at the *current* baud, waits briefly for the module to
+apply it, then reconfigures the firmware's own `Serial1` to the new
+rate to keep talking — same "apply on config change" pattern as
+§8.2a/§8.2b, except this one also has to reconfigure the transport
+itself, not just a module-side setting. A value outside the three
+supported rates is snapped to the nearest one rather than rejected —
+see ARCHITECTURE.md §6 for why "clamp to nearest," not "reject," is
+this codebase's consistent numeric-command validation strategy.
+
+> **⚠️ Unverified timing detail (§11 Open Questions):** the manual
+> doesn't specify whether the module's `OK` reply to `AT+UART` is sent
+> at the *old* baud (before switching) or the *new* one (after). The
+> firmware doesn't try to read that reply at all — it sends the
+> command, waits a fixed settle delay, and reconfigures its own UART
+> unconditionally — so this ambiguity doesn't block the switch, but it
+> does mean a failed/garbled switch currently has no confirmation
+> beyond "does data resume arriving afterward."
+
 ### 8.3 MFD-Triggered Calibration (N2K)
 
 In addition to the web UI (§8.2), a compatible chartplotter/MFD can
@@ -520,19 +574,19 @@ which has none either).
   (§8.2a).
 - On-module output data rate (`AT+PRATE`), persisted config, learned
   from the module at boot if not yet known (§8.2b).
+- UART baud rate: auto-detected at boot if not yet known, switchable
+  live via config (`AT+UART`, §8.2c).
+- Raw magnetic field as SignalK deltas
+  (`sensors.hwt3100.magneticField.x/y/z`), independently toggleable
+  (§5.2).
 - OTA firmware upgrades (reusing SensESP's built-in OTA support).
 
 ### 9.2 Post-MVP / Deferred
 
-- `AT+UART` (runtime baud switching) exposed as config — documented,
-  ASCII-mode-safe, just not needed yet. (`AT+FILT`/`AT+PRATE` were in
-  this category too, until §8.2a/§8.2b.)
-- Raw magnetic field as a SignalK delta or a custom N2K message, if a
-  real consumer need shows up (§5.2, §10) — currently diagnostic-only.
-- Auto-detection of the HWT3100's baud rate. Deferred — the firmware
-  hardcodes 115200 (§1.2's required pre-wiring `AT+UART=1` setting, not
-  the module's factory default of 9600); auto-detect adds complexity
-  not needed for a fixed hardware pairing.
+None remaining as of this version — the three items previously listed
+here (`AT+UART` runtime baud switching, raw magnetic field as a
+SignalK output, baud-rate auto-detection) are now implemented; see
+§9.1, §8.2c, §5.2.
 
 ### 9.3 Out of Scope (Not Deferred — Hardware Limitation)
 
@@ -696,6 +750,16 @@ which has none either).
 
 ## 11. Open Questions
 
+- **Whether `AT+UART`'s `OK` reply arrives at the old baud or the new
+  one (§8.2c)** — the manual doesn't say. The firmware doesn't rely on
+  reading it either way (it sends the command, waits a fixed settle
+  delay, then reconfigures its own UART unconditionally), so this
+  doesn't block the switch, but it does mean there's currently no
+  positive confirmation the switch actually succeeded beyond "does
+  valid data resume arriving afterward." Also unverified: the exact
+  settle delay needed between sending the command and the module
+  actually being ready at the new rate — chosen as a reasonable
+  fixed value, not derived from a datasheet timing spec.
 - **The entire PGN 130850/130851 MFD-calibration mechanism (§8.3) is
   unverified against real hardware** — no B&G/Simrad MFD or live N2K bus
   was available in this environment. The byte layout, `DEVICE_ID`'s true

@@ -107,16 +107,24 @@ touches `Serial1` directly. Two directions, both gated:
   owned by, `gateway.cpp` (2.6) and passed into `HWT3100SerialIO` by
   pointer — `HWT3100SerialIO` has no business knowing about the main
   event loop needed to construct one.
-- **Write** (only from the calibration command handler, 2.2): exposes a
-  single entry point, `SendCommand(HWT3100Command cmd)`, where
-  `HWT3100Command` is a closed enum with exactly three values —
-  `kStartCalibration`, `kEndCalibration`, `kClearCalibration` — mapping to
-  `AT+CALI=1`, `AT+CALI=0`, `AT+CALI=2` respectively (SPEC §8.2). There is
-  no method on this class that accepts raw bytes or arbitrary text, and
-  **no enum value for `AT+MODE` exists at all** — this isn't a value
-  that's excluded from a table, it's a value that was never added to the
-  enum's definition. Extending the enum to add it would require a
-  deliberate code change touching this file directly (SPEC §1.2, §2).
+- **Write**: `SendCommand(HWT3100Command cmd)`, where `HWT3100Command`
+  is a closed enum with exactly three values — `kStartCalibration`,
+  `kEndCalibration`, `kClearCalibration` — mapping to `AT+CALI=1`,
+  `AT+CALI=0`, `AT+CALI=2` respectively (SPEC §8.2, used only from the
+  calibration command handler, 2.2). Plus `SetOutputFilter()` (2.2b),
+  `SetOutputRate()`/`QueryOutputRate()` (2.2c), and `SetBaudRate()`
+  (2.2d) — each a single bounded, clamped numeric write, not a raw-text
+  path. There is no method on this class that accepts raw bytes or
+  arbitrary text, and **no enum value for `AT+MODE` exists at all** —
+  this isn't a value that's excluded from a table, it's a value that
+  was never added to the enum's definition. Extending the enum to add
+  it would require a deliberate code change touching this file
+  directly (SPEC §1.2, §2).
+- **Baud detection** (`DetectBaud()`, 2.2d): the one method on this
+  class that writes nothing at all — pure passive listening at each
+  candidate rate in turn, used only before `Begin()` starts the
+  background read task (no concurrent access to `Serial1` from two
+  places at once at that point).
 
 ### 2.2 Calibration Command Handler (`hwt3100_calibration_commands.h/.cpp`)
 
@@ -188,6 +196,44 @@ producer the serial terminal, 2.5, reads from) tries
 via `output_prate->set()`, which in turn re-applies it through the
 same `connect_to()` used for config-UI-driven changes (a harmless echo
 of what the module just reported).
+
+### 2.2d UART Baud Rate (`hwt3100_uart_command.h/.cpp`)
+
+`FormatUartCommand()` (SPEC §8.2c) — pure, unit-tested function that
+snaps a requested baud to the nearest of `{9600, 115200, 460800}`
+(ties toward the lower rate) and formats the matching `AT+UART=<n>`
+index, used by `HWT3100SerialIO::SetBaudRate()`. Unlike 2.2b/2.2c, this
+config item does double duty: `gateway.cpp`'s persisted
+`hwt3100_baud` represents both "what baud are we currently on" and
+"what baud do you want," same unknown-sentinel-then-learn pattern as
+2.2c (`halser::kBaudUnknown = -1`), but discovery here is
+`HWT3100SerialIO::DetectBaud()` (2.1) rather than a query/reply — a
+synchronous, blocking scan through candidate rates (115200, 9600,
+460800 in order) run once at boot, *before* `Begin()` starts the
+background read task, since it isn't safe to call concurrently with
+it. The first candidate that produces at least one line parsing via
+`ParseHWT3100Line()` is adopted and persisted; detection sends no
+`AT+UART` — it's passive listening, discovering what the module
+already is, not changing it.
+
+Once a baud is known (learned or explicitly set), changing
+`hwt3100_baud` through the config UI triggers `SetBaudRate()`: send
+`AT+UART=<n>` at the *current* rate, a fixed settle delay, then
+reconfigure `Serial1` to the new rate — same `connect_to()`-after-
+`set()` ordering trick as 2.2c uses to avoid a discovery-time `set()`
+looping back into an unwanted write (SPEC §8.2c documents the
+`connect_to()` wiring is attached *after* any startup-detection
+`set()`, so the initial discovery never itself fires a command).
+
+**Known limitation, documented rather than solved**: `SetBaudRate()`
+reconfigures `Serial1` from the main-loop thread while
+`HWT3100SerialIO`'s background read task may concurrently be calling
+`serial_.available()`/`read()` on the same object. This is a narrow,
+rare race (only during an explicit, infrequent user-triggered baud
+change, not during normal operation) accepted rather than solved with
+additional synchronization, consistent with this codebase's practice
+of flagging real limitations rather than adding untested complexity to
+paper over them (SPEC §11).
 
 ### 2.3 Calibration Offset
 
@@ -325,30 +371,39 @@ action.
 
 ### 2.7 SignalK Delta Sender
 
-Publishes `navigation.headingMagnetic` and `navigation.rateOfTurn` via
+Publishes `navigation.headingMagnetic`, `navigation.rateOfTurn`, and
+(if `raw_mag_field_enabled`) `sensors.hwt3100.magneticField.x/y/z` via
 SensESP's existing SignalK/WiFi transport, gated by the SignalK master
 enable flag (2.6). Uses the same corrected `HeadingReading` as the N2K
-sender (2.4) — single source of truth, per SPEC §2. Both in radians
-(rad and rad/s respectively), converted from the firmware's internal
-degrees representation right at this boundary (SPEC §3, §5.2 — an
-earlier version of the heading sender sent raw degrees, a real bug
-caught while wiring up the `meta.timeout` units field below).
-`navigation.rateOfTurn` is only set when `RateOfTurnEstimator` actually
-has a value (SPEC §5.1) — same gate as the N2K PGN 127251 sender, same
-sign convention (positive = starboard). Raw magnetic field is not
-published here (SPEC §5.2, §10) — it's diagnostic-only, visible via 2.5.
+sender (2.4) — single source of truth, per SPEC §2. Heading/rate-of-
+turn are in radians (rad and rad/s respectively), converted from the
+firmware's internal degrees representation right at this boundary
+(SPEC §3, §5.2 — an earlier version of the heading sender sent raw
+degrees, a real bug caught while wiring up the `meta.timeout` units
+field below). `navigation.rateOfTurn` is only set when
+`RateOfTurnEstimator` actually has a value (SPEC §5.1) — same gate as
+the N2K PGN 127251 sender, same sign convention (positive = starboard).
 
-Both outputs are constructed with an `SKMetadata` carrying the
-appropriate `units` (`"rad"` / `"rad/s"`) and `timeout_=5.0` (matching
-the N2K senders' own `ExpiringValue` window) — this `timeout_` field is
-SPEC §6's entire staleness mechanism on the SignalK side. No separate
-fault-indication component exists: SensESP's `SKMetadata` already has a
-first-class `timeout_` field, so this is one constructor argument, not
-new code. (An earlier version of this architecture had a dedicated
-`SKNotification`/`SKEmitter` subclass sending an active
-`notifications.*` alarm; replaced once `meta.timeout` was confirmed as
-the SignalK-spec-defined mechanism for exactly this — SPEC §10 covers
-the trade-off.)
+The raw magnetic field outputs are the one exception to "converted at
+the output boundary": `mag_x/y/z` are published as-is, the module's
+raw sensor counts, with no unit in their `SKMetadata` (the manual
+doesn't document a counts-to-µT conversion factor) and no calibration
+offset applied (§2.3 only corrects `heading`, per SPEC §3's note that
+the raw field is diagnostic-only). Gated behind its own toggle in
+addition to the SignalK master flag (SPEC §5.2) — off by default,
+unlike heading/rate-of-turn.
+
+All outputs are constructed with an `SKMetadata` carrying the
+appropriate `units` (`"rad"` / `"rad/s"` / none) and `timeout_=5.0`
+(matching the N2K senders' own `ExpiringValue` window) — this
+`timeout_` field is SPEC §6's entire staleness mechanism on the
+SignalK side. No separate fault-indication component exists: SensESP's
+`SKMetadata` already has a first-class `timeout_` field, so this is
+one constructor argument, not new code. (An earlier version of this
+architecture had a dedicated `SKNotification`/`SKEmitter` subclass
+sending an active `notifications.*` alarm; replaced once `meta.timeout`
+was confirmed as the SignalK-spec-defined mechanism for exactly this —
+SPEC §10 covers the trade-off.)
 
 ### 2.9 No Dedicated Fault LED
 
@@ -584,16 +639,14 @@ bus (also optional/toggleable).
 
 ## 9. Future Considerations
 
-- Post-MVP config (`AT+UART` — SPEC §9.2) would follow the same pattern
-  already established for `AT+FILT`/`AT+PRATE` (2.2b, 2.2c): a small
-  pure format/parse function plus one or two dedicated
-  `HWT3100SerialIO` methods, not a new generic/raw-text write path —
-  the architecture doesn't need to change shape to accommodate this,
-  and each addition stays auditable the same way.
-- If raw magnetic field ever gets a real consumer (SPEC §5.2, §9.2), it
-  flows through the same `HeadingReading`-based pipeline already carrying
-  it for diagnostics — no new sensor-side plumbing needed, just a new
-  sender/delta path consuming fields that already exist in the struct.
+- `AT+UART` (2.2d), raw magnetic field as a SignalK output (2.7), and
+  baud auto-detection (2.1, 2.2d) are all implemented as of this
+  version — SPEC §9.2's post-MVP list is now empty. Any further AT
+  command exposed as config (`AT+PRATE`'s sibling `AT+ID`/`AT+MRATE`
+  are permanently excluded, not deferred — see below) would follow the
+  same pattern established for `AT+FILT`/`AT+PRATE`/`AT+UART` (2.2b,
+  2.2c, 2.2d): a small pure format/parse function plus one or two
+  dedicated `HWT3100SerialIO` methods.
 - **`AT+MODE` and Modbus mode are not future considerations** — SPEC §9.3
   treats this as a permanent, deliberate exclusion, not a deferred
   feature. If a future need for higher throughput or Modbus-specific

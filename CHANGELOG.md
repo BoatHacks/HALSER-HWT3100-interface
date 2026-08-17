@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.0] - 2026-08-17
+
+### Added
+
+- HWT3100 UART baud rate is now auto-detected at boot (tries 115200,
+  then 9600, then 460800) if not already known, and switchable live via
+  config (`AT+UART`) — the firmware reconfigures its own UART to match
+  immediately after sending the command.
+- Raw magnetic field published as SignalK deltas
+  (`sensors.hwt3100.magneticField.x/y/z`), independently toggleable,
+  off by default.
+
+### Changed
+
+- The "pre-configure the module to 115200 baud before wiring to
+  HALSER" step is now a recommendation, not a requirement —
+  auto-detection resolves the chicken-and-egg problem that used to
+  make it mandatory.
+
 ## [0.2.2] - 2026-08-17
 
 ### Removed
