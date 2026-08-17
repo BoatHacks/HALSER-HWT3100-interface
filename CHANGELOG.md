@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.1] - 2026-08-17
+
+### Added
+
+- Config UI/SPEC now recommend `AT+PRATE=100` (10 datagrams/second) as
+  the practical minimum output rate for usable heading/rate-of-turn
+  resolution.
+- **Temporary diagnostic build**: adds a `UIButton` ("TEST: Ping
+  SignalK server") that fires an HTTP GET to the SignalK server on
+  click, to empirically test a suspected upstream SensESP bug (see
+  `docs/plans/uibutton-investigation.md`). Not a permanent feature —
+  will be removed in a follow-up release once tested.
+
+### Changed
+
+- Calibration action checkboxes reworded for clarity ("Calibration
+  1/3: Start" etc.), explicitly stating the check-and-Save,
+  auto-resets mechanic on all three instead of just the first.
+
 ## [0.2.0] - 2026-08-17
 
 ### Added
