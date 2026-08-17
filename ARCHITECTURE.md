@@ -6,7 +6,7 @@ firmware is built.
 ## 1. Overview
 
 ```
-                     UART (GPIO2 TX / GPIO3 RX), 9600 baud
+                     UART (GPIO2 TX / GPIO3 RX), 115200 baud
                      HALSER "UART" terminal block,
                      RX-select jumper on "U"
 HWT3100-TTL  ◄────────────────────────────────────► Serial1

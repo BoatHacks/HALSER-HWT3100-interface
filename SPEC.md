@@ -214,7 +214,9 @@ available," same as any other not-yet-valid reading (§6).
 - **Single source**: the HWT3100-TTL module, connected via UART to the
   ESP32-C3, GPIO2 TX / GPIO3 RX (HALSER's UART terminal block, RX-select
   jumper on "U" — confirmed against Hat Labs' HALSER hardware docs; see
-  ARCHITECTURE.md §5). Default baud 9600 bps (§1.2).
+  ARCHITECTURE.md §5). 115200 bps, requiring the module to be
+  pre-configured via `AT+UART=1` before wiring (§1.2) — not the
+  module's factory-default 9600.
 - There is no secondary/fallback sensor. If the HWT3100 stops sending
   data, the firmware does not substitute another source — it marks the
   data stale (see §6).
@@ -527,9 +529,10 @@ which has none either).
   this category too, until §8.2a/§8.2b.)
 - Raw magnetic field as a SignalK delta or a custom N2K message, if a
   real consumer need shows up (§5.2, §10) — currently diagnostic-only.
-- Auto-detection of the HWT3100's baud rate. Deferred — MVP hardcodes
-  9600 (the documented default); auto-detect adds complexity not needed
-  for a fixed hardware pairing.
+- Auto-detection of the HWT3100's baud rate. Deferred — the firmware
+  hardcodes 115200 (§1.2's required pre-wiring `AT+UART=1` setting, not
+  the module's factory default of 9600); auto-detect adds complexity
+  not needed for a fixed hardware pairing.
 
 ### 9.3 Out of Scope (Not Deferred — Hardware Limitation)
 
