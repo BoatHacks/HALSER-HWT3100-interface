@@ -415,6 +415,15 @@ periodic output interval in ms. Values in `(0, 10)` clamp up to `10`
 small positive request into "stop streaming entirely" would be far
 more surprising than rounding up.
 
+**Recommended minimum: `100` (10 datagrams/second).** Below that, both
+`RateOfTurnEstimator`'s windowed regression (§1.3, §3 — the default
+window is 2000ms/500ms min-span, ARCHITECTURE §2.4a) and the
+N2K/SignalK heading refresh rate lose meaningful resolution for a
+helm/autopilot display. The config UI's description field states this;
+it isn't enforced as a hard floor (`10` remains the lowest value the
+clamp will actually accept), since a slower rate is still valid — just
+not recommended.
+
 > **⚠️ `AT+PRATE=0` silences the module's continuous ASCII stream.**
 > This firmware's entire read pipeline (§2, ARCHITECTURE §2.1) is
 > built around parsing unsolicited `Magx=...` lines as they arrive —

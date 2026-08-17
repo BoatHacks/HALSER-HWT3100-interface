@@ -162,9 +162,12 @@ void run_hwt3100_gateway() {
       ->set_description(
           "Module's own output interval in ms. -1 = not yet known; queried "
           "from the sensor automatically at boot. 10-10000 = periodic "
-          "interval in ms. 0 = single-return mode -- WARNING: this disables "
-          "the continuous data stream this firmware depends on; only set "
-          "this if you understand the consequences.")
+          "interval in ms -- 100 (10 datagrams/second) is the recommended "
+          "minimum for usable heading/rate-of-turn resolution; going lower "
+          "gives faster updates at the cost of more UART/CPU load. 0 = "
+          "single-return mode -- WARNING: this disables the continuous "
+          "data stream this firmware depends on; only set this if you "
+          "understand the consequences.")
       ->set_sort_order(56)
       ->set_config_schema(
           R"schema({"type":"object","properties":{"value":{"title":"Rate (ms)","type":"integer","minimum":-1,"maximum":10000}}})schema");
