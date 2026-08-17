@@ -1,4 +1,20 @@
-# Investigation: SensESP UIButton live-hardware probe (temporary)
+# Investigation: SensESP UIButton live-hardware probe (temporary, complete)
+
+## Result
+
+**Confirmed on real hardware.** Flashed `v0.2.1` and checked every
+page of the actual served web UI (Status, System, Log, WiFi, SignalK,
+Configuration) — the "TEST: Ping SignalK server" button never appeared
+anywhere. Not just "renders but does nothing on click": it doesn't
+render at all, which is the stronger and more conclusive result, and
+matches the static-analysis finding exactly (no page in the actual
+served frontend bundle has any code path that reads a dynamic
+list of commands/buttons).
+
+The probe block has been removed from `gateway.cpp` now that the test
+is done (this doc originally described it as in-place). See the
+upstream issue write-up (delivered to the user, not committed to this
+repo) for the full report, now updated with this confirmation.
 
 ## Overview
 

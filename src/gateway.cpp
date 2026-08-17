@@ -1,6 +1,5 @@
 #include "gateway.h"
 
-#include <HTTPClient.h>
 #include <N2kMessages.h>
 #include <NMEA2000_esp32.h>
 #include <esp_mac.h>
@@ -20,7 +19,6 @@
 #include "sensesp/system/observablevalue.h"
 #include "sensesp/system/task_queue_producer.h"
 #include "sensesp/ui/config_item.h"
-#include "sensesp/ui/ui_button.h"
 #include "sensesp_app_builder.h"
 #include "serial_terminal.h"
 
@@ -86,36 +84,6 @@ void run_hwt3100_gateway() {
   // GPIO8 to show WiFi/WebSocket connection status, with no public hook
   // to share or override it. Fault indication (SPEC.md §6) is
   // SignalK-notification-only; see docs/plans/fault-indication.md.
-
-  // --- TEMPORARY: UIButton live-hardware probe (remove once tested) ---
-  //
-  // Empirical test for the upstream SensESP issue investigated in
-  // docs/plans/uibutton-investigation.md: does clicking a UIButton in
-  // the real web UI ever actually invoke its attached callback? Source
-  // inspection (backend routes + the decompiled frontend bundle) found
-  // no wiring at all, but this fires a real, observable side effect —
-  // an HTTP GET to the SignalK server's own base URL — so it can be
-  // confirmed (or refuted) against real hardware and real server logs,
-  // not just static analysis. If the request never shows up in the
-  // SignalK server's access log no matter how the button is clicked,
-  // that's a live-hardware confirmation to attach to the upstream
-  // issue. Not gated behind any config; this block should be deleted
-  // once the test is done either way.
-  {
-    auto* test_button =
-        sensesp::UIButton::add("uibutton_probe", "TEST: Ping SignalK server");
-    test_button->attach([sensesp_app]() {
-      auto ws_client = sensesp_app->get_ws_client();
-      String url = "http://" + ws_client->get_server_address() + ":" +
-                   String(ws_client->get_server_port()) + "/signalk";
-      ESP_LOGI("uibutton_probe", "UIButton clicked - GET %s", url.c_str());
-      HTTPClient http;
-      http.begin(url);
-      int status = http.GET();
-      ESP_LOGI("uibutton_probe", "GET %s -> status %d", url.c_str(), status);
-      http.end();
-    });
-  }
 
   // --- Configuration (SPEC.md §7) ---
 

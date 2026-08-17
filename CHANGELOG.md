@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.2] - 2026-08-17
+
+### Removed
+
+- The temporary "TEST: Ping SignalK server" `UIButton` diagnostic
+  added in 0.2.1. Testing on real hardware confirmed the suspected
+  upstream SensESP bug: the button never rendered anywhere in the web
+  UI. No longer needed now that the finding is confirmed; also drops
+  the `HTTPClient` dependency it pulled in.
+
 ## [0.2.1] - 2026-08-17
 
 ### Added
