@@ -54,6 +54,25 @@ manual and the vendor's own Arduino SDK example (`wit_c_sdk.c`):
 - Default baud rate is **9600 bps**, configurable to 115200 or 460800 via
   `AT+UART`.
 
+> **⚠️ Model restriction:** this firmware works with the **HWT3100-TTL**
+> variant only — not HWT3100-232 (RS-232) or HWT3100-485 (RS-485). Those
+> variants use different physical-layer signaling that HALSER's UART
+> terminal block doesn't support (SPEC.md §4, and the wiring guidance
+> that follows this note).
+
+> **⚠️ Required pre-wiring setup:** before connecting the module to
+> HALSER, it must be reconfigured from its factory-default 9600 baud to
+> **115200 baud**, by sending `AT+UART=1` while the module is connected
+> to a PC/USB-TTL adapter at its *current* (default, 9600) baud rate.
+> This is a one-time manual step done outside this firmware, and it must
+> happen *before* wiring to HALSER — the firmware itself talks to the
+> module at 115200 only (`kHWT3100DefaultBaud`, halser_const.h) and has
+> no way to detect or reconfigure a module still sitting at 9600 (§9.2,
+> "auto-detection... deferred"). Getting this step wrong looks like "no
+> data ever arrives," not a crash — there's nothing in the serial
+> terminal (§8.1) to debug against if the module is still on the wrong
+> baud, since HALSER's UART won't even frame the bytes correctly.
+
 > **⚠️ Hardware hazard:** sending `AT+MODE=1` switches the module out of
 > ASCII mode into Modbus mode. Per a firsthand report, this has bricked a
 > real unit. **This firmware must never send `AT+MODE` (in either
@@ -337,9 +356,28 @@ ASCII mode):
 | `AT+CALI=0` | End calibration |
 | `AT+CALI=2` | Clear magnetic-field calibration offset (reset) |
 
-(`AT+UART`, `AT+PRATE`, `AT+ID`, `AT+FILT` also exist in the manual but
-aren't calibration commands and aren't in scope for §8.2 — they're
-noted here for completeness, not implemented in MVP.)
+(`AT+UART`, `AT+PRATE`, `AT+ID` also exist in the manual but aren't
+calibration commands and aren't in scope for §8.2 — noted here for
+completeness, not implemented. `AT+FILT` *is* implemented, but as
+persisted config rather than a calibration action — see below.)
+
+### 8.2a Output Filter (`AT+FILT`)
+
+Per the manual §5.3.1: `AT+FILT=<n>` sets the module's own output
+smoothing filter. `n` in `[1, 999]` sets the filter strength — smaller
+values smooth more. `n = 0` and `n = 1000` are both valid to send but
+the manual documents them as "not to set the filter" (no smoothing;
+`0` is the module's own default).
+
+Exposed as a single persisted integer config value (`0-1000`,
+clamped), sent to the module once at boot and again on every config
+change — unlike §8.2's calibration actions, this isn't a one-shot
+trigger, since the module doesn't report its current filter setting
+back and a reboot would otherwise silently revert it to `0`. Still
+goes through `HWT3100SerialIO`'s allowlisted write surface: the value
+is clamped to `[0, 1000]` before it's ever formatted into a command
+string, so this doesn't reopen the door to sending arbitrary text
+(ARCHITECTURE.md §6).
 
 Requirements:
 
@@ -402,13 +440,15 @@ which has none either).
   drive the HWT3100's own on-module magnetic-field calibration (§8.2).
 - MFD-triggered calibration start/stop over N2K (§8.3), reverse-engineered
   proprietary protocol, unverified against real hardware.
+- On-module output smoothing filter (`AT+FILT`), persisted config
+  (§8.2a).
 - OTA firmware upgrades (reusing SensESP's built-in OTA support).
 
 ### 9.2 Post-MVP / Deferred
 
-- Any of `AT+UART` (runtime baud switching), `AT+PRATE` (return rate),
-  `AT+FILT` (output smoothing filter) exposed as config — all documented,
-  all ASCII-mode-safe, just not needed for MVP.
+- `AT+UART` (runtime baud switching), `AT+PRATE` (return rate) exposed
+  as config — both documented, both ASCII-mode-safe, just not needed
+  yet. (`AT+FILT` was in this category too, until §8.2a.)
 - Raw magnetic field as a SignalK delta or a custom N2K message, if a
   real consumer need shows up (§5.2, §10) — currently diagnostic-only.
 - Auto-detection of the HWT3100's baud rate. Deferred — MVP hardcodes

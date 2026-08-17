@@ -383,10 +383,16 @@ Same as the parent firmware (see its AGENTS.md), plus one addition:
 
 ## 5. Integration Points
 
-- **HWT3100-TTL module** — UART1, `Serial1`, GPIO2 TX / GPIO3 RX, 9600
-  baud (module default), wired to HALSER's UART terminal block with the
-  RX-select jumper on "U" (confirmed against Hat Labs' HALSER hardware
-  docs — the board has one shared UART peripheral muxed by that jumper
+- **HWT3100-TTL module** (TTL variant only — see SPEC §1.2) — UART1,
+  `Serial1`, GPIO2 TX / GPIO3 RX, **115200 baud**, NOT the module's
+  factory-default 9600 (`kHWT3100DefaultBaud`, halser_const.h). The
+  module must be reconfigured to 115200 via `AT+UART=1` *before* wiring
+  to HALSER (SPEC §1.2) — this firmware can't perform that
+  reconfiguration itself, since it can't talk to the module until the
+  module is already at the rate the firmware expects. Wired to HALSER's
+  UART terminal block with the RX-select jumper on "U" (confirmed
+  against Hat Labs' HALSER hardware docs — the board has one shared
+  UART peripheral muxed by that jumper
   across NMEA0183/RS-232/UART connectors). Protocol confirmed from the
   vendor manual + SDK: ASCII mode, comma-delimited text lines for data,
   `AT+`-prefixed text commands for calibration (SPEC §1.2). Exact parsing

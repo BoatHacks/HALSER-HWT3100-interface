@@ -14,10 +14,11 @@ namespace halser {
 //
 // Runs a dedicated FreeRTOS task that reads the module's ASCII output,
 // parses it via ParseHWT3100Line() (hwt3100_parser.h), and marshals
-// results to the main SensESP loop. Also exposes the *only* write path
+// results to the main SensESP loop. Also exposes the *only* write paths
 // to the module: SendCommand(), which accepts nothing but the three
-// closed HWT3100Command values — there is deliberately no method here
-// that accepts raw bytes or text (SPEC.md §8.2).
+// closed HWT3100Command values, and SetOutputFilter(), which sends
+// AT+FILT with a bounds-clamped integer (SPEC.md §8.2/§9). There is
+// deliberately no method here that accepts raw bytes or arbitrary text.
 class HWT3100SerialIO {
  public:
   // heading_producer/raw_line_producer must outlive this object and the
@@ -32,11 +33,15 @@ class HWT3100SerialIO {
   // the main setup path.
   void Begin(unsigned long baud, int rx_pin, int tx_pin);
 
-  // The ONLY method that writes to the HWT3100. There is no overload, no
-  // debug backdoor, and no way to make this method transmit anything
-  // other than one of HWT3100Command's three known-safe values — see
-  // ARCHITECTURE.md §6 for why that's the point.
+  // Transmits one of HWT3100Command's three known-safe values — no
+  // overload, no debug backdoor (ARCHITECTURE.md §6).
   void SendCommand(HWT3100Command cmd);
+
+  // Sends AT+FILT=<value>, clamped to [0, 1000] by FormatFilterCommand()
+  // (hwt3100_filter_command.h) before anything reaches the wire — the
+  // one parameterized write this class allows, still not a raw-text
+  // backdoor (SPEC.md §8.2/§9, ARCHITECTURE.md §6).
+  void SetOutputFilter(int value);
 
  private:
   static void ReadTaskTrampoline(void* arg);

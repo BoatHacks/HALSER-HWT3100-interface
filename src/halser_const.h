@@ -17,8 +17,13 @@ constexpr gpio_num_t kCANRxPin = GPIO_NUM_5;
 // see gateway.cpp and docs/plans/fault-indication.md.
 constexpr int kButtonPin = 9;
 
-// HWT3100-TTL/232 default baud rate (ARCHITECTURE.md §5, SPEC.md §1.2).
-constexpr int kHWT3100DefaultBaud = 9600;
+// HWT3100-TTL required baud rate (ARCHITECTURE.md §5, SPEC.md §1.2).
+// NOT the module's factory default (9600) — this firmware requires the
+// module to be reconfigured to 115200 via AT+UART=1 *before* wiring it
+// to HALSER (SPEC.md §1.2 prerequisite). This firmware has no way to
+// perform that reconfiguration itself: it can't talk to the module
+// until the module is already at this rate.
+constexpr int kHWT3100DefaultBaud = 115200;
 
 // NMEA 2000 device identity — cloned from the B&G Precision-9 compass's
 // identity (SPEC.md §1.2, §5.1, §10), via the reference implementation

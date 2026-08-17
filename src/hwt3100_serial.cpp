@@ -6,6 +6,7 @@
 
 #include <cstdio>
 
+#include "hwt3100_filter_command.h"
 #include "hwt3100_parser.h"
 
 namespace halser {
@@ -59,6 +60,12 @@ void HWT3100SerialIO::SendCommand(HWT3100Command cmd) {
   if (text != nullptr) {
     serial_.print(text);
   }
+}
+
+void HWT3100SerialIO::SetOutputFilter(int value) {
+  char buf[24];
+  FormatFilterCommand(value, buf, sizeof(buf));
+  serial_.print(buf);
 }
 
 void HWT3100SerialIO::ReadTaskTrampoline(void* arg) {
