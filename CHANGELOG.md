@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.4.0] - 2026-08-17
+
+### Added
+
+- Magnetic variation is now read from the N2K bus (PGN 127258, from
+  another device such as a GPS) and used to fill PGN 127250's
+  previously-always-N/A Variation field, and to compute and publish
+  `navigation.headingTrue` — both only when a source exists on the bus.
+  This firmware still never originates a variation value or PGN 127258
+  itself.
+- Rate-of-turn window and minimum-span are now tunable via config,
+  replacing the previous compile-time constants — lets an installation
+  trade off smoothing vs. responsiveness without a firmware rebuild.
+
 ## [0.3.0] - 2026-08-17
 
 ### Added

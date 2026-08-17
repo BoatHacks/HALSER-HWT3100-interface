@@ -52,19 +52,29 @@ class ExpiringValue {
 /// firmware transmits N2K "not available" values when stale rather than
 /// omitting the PGN, and that decision applies equally to "never
 /// received a reading yet" (also "not available").
+///
+/// Also owns variation_ (SPEC.md §5.1a), fed by MagneticVariationListener
+/// from bus-sourced PGN 127258 rather than the HWT3100 — this firmware
+/// has no way to originate a variation value itself. Its expiry is much
+/// longer than heading_'s: magnetic variation changes on a geographic
+/// timescale, not a per-second one, so a short expiry would flap the
+/// Variation field on and off between an infrequently-rebroadcasting
+/// source's updates.
 class N2kHeadingSender {
  public:
-  explicit N2kHeadingSender(tNMEA2000* nmea2000, unsigned long expiry = 5000)
-      : nmea2000_(nmea2000), heading_(expiry) {}
+  explicit N2kHeadingSender(tNMEA2000* nmea2000, unsigned long expiry = 5000,
+                             unsigned long variation_expiry = 300000)
+      : nmea2000_(nmea2000), heading_(expiry), variation_(variation_expiry) {}
 
   void send() {
     tN2kMsg msg;
-    SetN2kPGN127250(msg, 0xff, heading_.to_n2k(), N2kDoubleNA, N2kDoubleNA,
-                     N2khr_magnetic);
+    SetN2kPGN127250(msg, 0xff, heading_.to_n2k(), N2kDoubleNA,
+                     variation_.to_n2k(), N2khr_magnetic);
     nmea2000_->SendMsg(msg);
   }
 
   ExpiringValue<float> heading_;
+  ExpiringValue<float> variation_;
 
  private:
   tNMEA2000* nmea2000_;

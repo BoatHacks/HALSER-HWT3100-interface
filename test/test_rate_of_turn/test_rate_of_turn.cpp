@@ -135,6 +135,39 @@ static void test_wraparound_regression_multiple_samples(void) {
   TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.5236f, rate);
 }
 
+static void test_set_window_ms_narrows_included_samples(void) {
+  // Deliberately non-collinear (0, 5, 20 deg at t=0/750/1500) so
+  // dropping a sample actually changes the fitted slope -- three
+  // perfectly-collinear points would give the same least-squares slope
+  // regardless of which subset is included, which would defeat the
+  // point of this test.
+  RateOfTurnEstimator estimator(2000, 100);
+  estimator.AddSample(0.0f, 0);
+  estimator.AddSample(5.0f, 750);
+  estimator.AddSample(20.0f, 1500);
+  float rate_wide_window = 0.0f;
+  TEST_ASSERT_TRUE(estimator.GetRateOfTurn(&rate_wide_window));
+
+  estimator.SetWindowMs(1000);
+  float rate_narrow_window = 0.0f;
+  TEST_ASSERT_TRUE(estimator.GetRateOfTurn(&rate_narrow_window));
+  // Narrowing the window drops the t=0 sample (outside 1500-1000=500),
+  // leaving only the two samples 750ms apart -- a different fit than
+  // all three samples over 1500ms.
+  TEST_ASSERT_TRUE(fabsf(rate_narrow_window - rate_wide_window) > 0.001f);
+}
+
+static void test_set_min_span_ms_rejects_narrower_spacing(void) {
+  RateOfTurnEstimator estimator(2000, 100);
+  estimator.AddSample(0.0f, 0);
+  estimator.AddSample(10.0f, 200);  // 200ms span
+  float rate = 0.0f;
+  TEST_ASSERT_TRUE(estimator.GetRateOfTurn(&rate));  // 200ms >= 100ms min
+
+  estimator.SetMinSpanMs(500);
+  TEST_ASSERT_FALSE(estimator.GetRateOfTurn(&rate));  // 200ms < 500ms min
+}
+
 int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_not_enough_samples);
@@ -148,5 +181,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_startup_window_clamp_does_not_underflow);
   RUN_TEST(test_regression_uses_all_samples_not_just_endpoints);
   RUN_TEST(test_wraparound_regression_multiple_samples);
+  RUN_TEST(test_set_window_ms_narrows_included_samples);
+  RUN_TEST(test_set_min_span_ms_rejects_narrower_spacing);
   return UNITY_END();
 }

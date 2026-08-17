@@ -36,6 +36,13 @@ class RateOfTurnEstimator {
   // clears out old samples.
   bool GetRateOfTurn(float* rate_of_turn_rad_per_s) const;
 
+  // Runtime-mutable window/min-span (SPEC.md §7, §11) — previously
+  // fixed at construction. Read fresh by GetRateOfTurn() on every
+  // call, so a change takes effect on the very next call; no need to
+  // rebuild the ring buffer or reset any state.
+  void SetWindowMs(unsigned long window_ms) { window_ms_ = window_ms; }
+  void SetMinSpanMs(unsigned long min_span_ms) { min_span_ms_ = min_span_ms; }
+
  private:
   // Bounds memory for a fixed-size ring buffer. At a plausible HWT3100
   // update rate (up to ~10 Hz, per its documented 0.1-100 Hz range but

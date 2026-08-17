@@ -11,6 +11,7 @@
 #include "hwt3100_serial.h"
 #include "hwt3100_types.h"
 #include "hwt3100_uart_command.h"
+#include "magnetic_variation_listener.h"
 #include "mfd_calibration_bridge.h"
 #include "n2k_senders.h"
 #include "rate_of_turn.h"
@@ -52,6 +53,13 @@ constexpr float kDegreesToRadians = kPi / 180.0f;
 // SignalK meta.timeout advisory should agree with when N2K actually
 // starts sending "not available."
 constexpr float kHeadingTimeoutSeconds = 5.0f;
+
+// Matches N2kHeadingSender's variation_ expiry default (SPEC.md §5.1a)
+// — much longer than heading's, since bus-sourced magnetic variation
+// changes on a geographic timescale and typically isn't rebroadcast
+// every second the way heading is.
+constexpr float kVariationTimeoutSeconds = 300.0f;
+constexpr float kTwoPi = 2.0f * kPi;
 
 // Baud auto-detection order and per-candidate timeout (SPEC.md §8.2c):
 // recommended rate first (fast path for an already-configured module),
@@ -165,6 +173,19 @@ void run_hwt3100_gateway() {
       ->set_config_schema(
           R"schema({"type":"object","properties":{"value":{"title":"Enabled","type":"boolean"}}})schema");
 
+  auto sk_heading_true_enabled = std::make_shared<PersistingObservableValue<bool>>(
+      true, "/signalk/heading_true_enabled");
+  ConfigItem(sk_heading_true_enabled)
+      ->set_title("Enable navigation.headingTrue")
+      ->set_description(
+          "Computed as magnetic heading + variation (SPEC.md §5.1a). Only "
+          "published when a recent magnetic variation has been seen from "
+          "another device on the N2K bus (PGN 127258) — this firmware has "
+          "no GPS or geomagnetic model of its own.")
+      ->set_sort_order(123)
+      ->set_config_schema(
+          R"schema({"type":"object","properties":{"value":{"title":"Enabled","type":"boolean"}}})schema");
+
   // Raw magnetic field as SignalK deltas (SPEC.md §5.2) — diagnostic
   // data with no established SignalK path, so it's off by default and
   // gated separately from signalk_enabled (both must be true to
@@ -177,7 +198,7 @@ void run_hwt3100_gateway() {
           "Publishes sensors.hwt3100.magneticField.x/y/z -- raw, "
           "uncalibrated sensor counts from the HWT3100 (SPEC.md §5.2). "
           "Diagnostic-only; off by default.")
-      ->set_sort_order(123)
+      ->set_sort_order(124)
       ->set_config_schema(
           R"schema({"type":"object","properties":{"value":{"title":"Enabled","type":"boolean"}}})schema");
 
@@ -254,6 +275,39 @@ void run_hwt3100_gateway() {
       ->set_config_schema(
           R"schema({"type":"object","properties":{"value":{"title":"Baud","type":"integer"}}})schema");
 
+  // Rate-of-turn window/min-span (SPEC.md §7, §11): previously
+  // compile-time constants, now tunable without a firmware rebuild —
+  // the right smoothing-vs-responsiveness trade-off is a per-
+  // installation judgment call. Plain defaults, applied at boot and on
+  // every change (no unknown-sentinel/discovery needed, unlike the
+  // AT+ config items above — this is a firmware-side number with no
+  // hardware round-trip).
+  auto rate_of_turn_window_ms = std::make_shared<PersistingObservableValue<int>>(
+      static_cast<int>(kRateOfTurnWindowMs), "/rate_of_turn/window_ms");
+  ConfigItem(rate_of_turn_window_ms)
+      ->set_title("Rate of Turn Window (ms)")
+      ->set_description(
+          "How far back heading samples are kept for the rate-of-turn fit. "
+          "Longer = smoother but laggier; shorter = more responsive but "
+          "noisier.")
+      ->set_sort_order(59)
+      ->set_config_schema(
+          R"schema({"type":"object","properties":{"value":{"title":"Window (ms)","type":"integer","minimum":500,"maximum":10000}}})schema");
+
+  auto rate_of_turn_min_span_ms = std::make_shared<PersistingObservableValue<int>>(
+      static_cast<int>(kRateOfTurnMinSpanMs), "/rate_of_turn/min_span_ms");
+  ConfigItem(rate_of_turn_min_span_ms)
+      ->set_title("Rate of Turn Minimum Span (ms)")
+      ->set_description(
+          "Minimum elapsed time between the oldest and newest sample in "
+          "the window before a rate-of-turn value is produced at all -- "
+          "below this, ordinary sensor noise over a very short span would "
+          "read as wild rate swings. Clamped to never exceed the window "
+          "above (a larger minimum span could never be satisfied).")
+      ->set_sort_order(60)
+      ->set_config_schema(
+          R"schema({"type":"object","properties":{"value":{"title":"Minimum span (ms)","type":"integer","minimum":100,"maximum":10000}}})schema");
+
   // --- NMEA 2000 (CAN bus via TWAI) ---
 
   // Identifies as a B&G Precision-9 (SPEC.md §1.2, §5.1, §10) — product
@@ -317,6 +371,13 @@ void run_hwt3100_gateway() {
       "navigation.rateOfTurn", "/signalk/rate_of_turn_path",
       new SKMetadata("rad/s", "", "", "", kHeadingTimeoutSeconds));
 
+  // navigation.headingTrue (SPEC.md §5.1a): magnetic heading + bus-
+  // sourced variation, only set when a recent variation is available
+  // (see the heading_producer consumer lambda below).
+  auto sk_heading_true_output = new SKOutputFloat(
+      "navigation.headingTrue", "/signalk/heading_true_path",
+      new SKMetadata("rad", "", "", "", kVariationTimeoutSeconds));
+
   // Raw magnetic field (SPEC.md §5.2): custom sensors.* paths, no
   // established standard, no unit (the manual doesn't document a
   // counts-to-µT conversion factor) — raw sensor counts as-is, same
@@ -367,6 +428,29 @@ void run_hwt3100_gateway() {
   auto rate_of_turn_estimator = new halser::RateOfTurnEstimator(
       kRateOfTurnWindowMs, kRateOfTurnMinSpanMs);
 
+  // Applies both persisted values to the estimator, clamping min_span
+  // to never exceed window (SPEC.md §7) — a larger min_span could
+  // never be satisfied, since the window itself caps the maximum
+  // possible sample span.
+  auto apply_rate_of_turn_config = [rate_of_turn_estimator, rate_of_turn_window_ms,
+                                     rate_of_turn_min_span_ms]() {
+    unsigned long window = static_cast<unsigned long>(rate_of_turn_window_ms->get());
+    unsigned long min_span =
+        static_cast<unsigned long>(rate_of_turn_min_span_ms->get());
+    if (min_span > window) min_span = window;
+    rate_of_turn_estimator->SetWindowMs(window);
+    rate_of_turn_estimator->SetMinSpanMs(min_span);
+  };
+  apply_rate_of_turn_config();
+  rate_of_turn_window_ms->connect_to(
+      new LambdaConsumer<int>([apply_rate_of_turn_config](int) {
+        apply_rate_of_turn_config();
+      }));
+  rate_of_turn_min_span_ms->connect_to(
+      new LambdaConsumer<int>([apply_rate_of_turn_config](int) {
+        apply_rate_of_turn_config();
+      }));
+
   heading_producer->connect_to(new LambdaConsumer<HeadingReading>(
       [=](HeadingReading reading) {
         HeadingReading corrected =
@@ -381,6 +465,19 @@ void run_hwt3100_gateway() {
         heading_sender->heading_.update(heading_rad);
         if (signalk_enabled->get() && sk_heading_enabled->get()) {
           sk_heading_output->set(heading_rad);
+        }
+
+        // navigation.headingTrue (SPEC.md §5.1a): only computed/published
+        // when a recent bus-sourced variation exists — omitted, not sent
+        // as a placeholder, when it doesn't (same "don't fabricate data"
+        // pattern as rate of turn before enough history exists).
+        if (heading_sender->variation_.is_valid()) {
+          float heading_true_rad = fmodf(
+              heading_rad + heading_sender->variation_.value(), kTwoPi);
+          if (heading_true_rad < 0.0f) heading_true_rad += kTwoPi;
+          if (signalk_enabled->get() && sk_heading_true_enabled->get()) {
+            sk_heading_true_output->set(heading_true_rad);
+          }
         }
 
         rate_of_turn_estimator->AddSample(corrected.heading, corrected.timestamp);
@@ -473,6 +570,14 @@ void run_hwt3100_gateway() {
   // real hardware; see docs/plans/mfd-calibration.md. Self-attaches to
   // nmea2000 via its tMsgHandler base constructor.
   new halser::MfdCalibrationBridge(nmea2000, calibration_commands);
+
+  // Listens for PGN 127258 (Magnetic Variation) from another N2K
+  // device (SPEC.md §5.1a) — feeds heading_sender's variation_ so PGN
+  // 127250's own Variation field and navigation.headingTrue (below)
+  // both get real data when a source exists on the bus. Read-only:
+  // never transmits PGN 127258 itself. Self-attaches to nmea2000 via
+  // its tMsgHandler base constructor, same as MfdCalibrationBridge.
+  new halser::MagneticVariationListener(nmea2000, &heading_sender->variation_);
 
   // Three adjacent, consistently-worded actions (SPEC.md §8.2): each is
   // a one-shot trigger, not a persistent setting — SensESP's config UI

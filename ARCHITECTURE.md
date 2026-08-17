@@ -253,7 +253,11 @@ code — one never touches the serial link, the other only does.
   version. Uses the `ExpiringValue<T>` pattern, which already does
   exactly what SPEC §6 (stale-data behavior) asks: `to_n2k()` returns
   `N2kDoubleNA` once a value goes stale, satisfying the "transmit N2K
-  not-available values" decision for free.
+  not-available values" decision for free. Also owns a second
+  `ExpiringValue<float> variation_`, fed by `MagneticVariationListener`
+  (2.4b) — `send()` passes `variation_.to_n2k()` for the Variation
+  field instead of the hardcoded `N2kDoubleNA` used for Deviation
+  (SPEC §5.1, §5.1a).
 - `N2kRateOfTurnSender` — PGN 127251, same `ExpiringValue<T>` pattern,
   fed by `RateOfTurnEstimator` (2.4a) rather than directly by the
   HWT3100 — the hardware has no gyroscope (SPEC §1.3, §5.1, §10).
@@ -326,6 +330,44 @@ downstream of calibration (so a heading offset change doesn't look like
 an instantaneous "turn" to the estimator) without adding a second
 observer of the raw `TaskQueueProducer`.
 
+`window_ms_`/`min_span_ms_` are runtime-mutable via `SetWindowMs()`/
+`SetMinSpanMs()` (SPEC §7, §11) rather than fixed at construction —
+`gateway.cpp` wires two persisted config items to them, applied at
+boot and on every config change (same apply-at-boot-and-on-change
+pattern as `AT+FILT`, 2.2b). No sentinel/unknown state needed here
+(unlike `AT+FILT`/`AT+PRATE`/`AT+UART`'s persisted values): these are
+pure firmware-side numbers with no hardware round-trip and no state to
+discover, so a plain default is safe to apply unconditionally.
+`min_span_ms` is clamped to never exceed `window_ms` at the point
+either config value is applied — a `min_span_ms` larger than the
+window it's measured within can never be satisfied (the window itself
+caps the maximum possible span), which would silently make
+`GetRateOfTurn()` always return "not available."
+
+### 2.4b Magnetic Variation Listener (`magnetic_variation_listener.h/.cpp`)
+
+`MagneticVariationListener : public tNMEA2000::tMsgHandler`, filtered
+to PGN 127258 (Magnetic Variation), self-attached to the `tNMEA2000`
+instance it's constructed with — same base-class/self-attach pattern
+as `MfdCalibrationBridge` (2.2a), but read-only: it never sends
+anything, only listens. On a valid message (`ParseN2kMagneticVariation`
+succeeds and the value isn't itself `N2kDoubleNA`), updates an
+`ExpiringValue<float>*` supplied by the caller — the same one
+`N2kHeadingSender` (2.4) exposes as `variation_`, so a single value
+flows to both consumers (PGN 127250's own Variation field, and
+`gateway.cpp`'s `navigation.headingTrue` computation, 2.7) without a
+second copy of the "is it still fresh" logic. `variation_`'s expiry is
+intentionally much longer than heading's 5s (SPEC §5.1a) — magnetic
+variation changes on a geographic timescale, not a per-second one, so
+treating an infrequently-rebroadcast value as "stale" after only a few
+seconds would flap the Variation field and `navigation.headingTrue`
+on and off for no real reason.
+
+Deliberately one-directional: this firmware never constructs or sends
+a PGN 127258 message itself (SPEC §5.1a, §9.3's "don't fabricate data"
+principle applies here too — this firmware has no way to originate a
+variation value honestly).
+
 ### 2.5 Serial Terminal (`serial_terminal.h/.cpp`, class `SerialTerminal`)
 
 **Implementation-time correction**: this is no longer a WebSocket
@@ -383,23 +425,28 @@ action.
 
 ### 2.7 SignalK Delta Sender
 
-Publishes `navigation.headingMagnetic`, `navigation.rateOfTurn`, and
-`sensors.hwt3100.magneticField.x/y/z` via SensESP's existing
-SignalK/WiFi transport. Each has its own enable flag
-(`sk_heading_enabled`, `sk_rate_of_turn_enabled`,
-`raw_mag_field_enabled`) checked *in addition to* the SignalK master
-enable flag (2.6) — same master-plus-per-output pattern as the N2K
-senders (2.4), so disabling one delta doesn't require disabling
-SignalK entirely, and vice versa. Uses the same corrected
-`HeadingReading` as the N2K sender (2.4) — single source of truth, per
-SPEC §2. Heading/rate-of-turn are in radians (rad and rad/s
-respectively), converted from the firmware's internal degrees
+Publishes `navigation.headingMagnetic`, `navigation.rateOfTurn`,
+`navigation.headingTrue`, and `sensors.hwt3100.magneticField.x/y/z`
+via SensESP's existing SignalK/WiFi transport. Each has its own enable
+flag (`sk_heading_enabled`, `sk_rate_of_turn_enabled`,
+`sk_heading_true_enabled`, `raw_mag_field_enabled`) checked *in
+addition to* the SignalK master enable flag (2.6) — same
+master-plus-per-output pattern as the N2K senders (2.4), so disabling
+one delta doesn't require disabling SignalK entirely, and vice versa.
+Uses the same corrected `HeadingReading` as the N2K sender (2.4) —
+single source of truth, per SPEC §2. Heading/rate-of-turn/true-heading
+are in radians, converted from the firmware's internal degrees
 representation right at this boundary (SPEC §3, §5.2 — an earlier
 version of the heading sender sent raw degrees, a real bug caught
 while wiring up the `meta.timeout` units field below).
 `navigation.rateOfTurn` is only set when `RateOfTurnEstimator`
 actually has a value (SPEC §5.1) — same gate as the N2K PGN 127251
 sender, same sign convention (positive = starboard).
+`navigation.headingTrue` is only set when `N2kHeadingSender`'s
+`variation_` (2.4, fed by `MagneticVariationListener`, 2.4b) is valid —
+computed as `magnetic heading + variation` right in `gateway.cpp`'s
+consumer lambda (SPEC §5.1a), wrapped into `[0, 2π)` the same way
+`ApplyCalibrationOffset` (2.3) wraps degrees into `[0, 360)`.
 
 The raw magnetic field outputs are the one exception to "converted at
 the output boundary": `mag_x/y/z` are published as-is, the module's

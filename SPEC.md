@@ -232,7 +232,10 @@ Two PGNs are implemented:
 - **PGN 127250 — Vessel Heading**: real data. Radians, per
   `SetN2kPGN127250`'s documented parameter — converted from the
   firmware's internal degrees representation (§3) at this output
-  boundary, same as SignalK's (§5.2).
+  boundary, same as SignalK's (§5.2). The Deviation field is always
+  "not available" (this firmware has no way to derive it — §1.2, §10);
+  the Variation field is populated from the bus when available — see
+  §5.1a.
 - **PGN 127251 — Rate of Turn**: *computed*, not sensed — the HWT3100
   has no gyroscope, so this is derived from a sliding window of recent
   heading readings (§1.3, §3). This is genuinely-derived data (the
@@ -267,6 +270,40 @@ it's genuinely on the bus (the library's own docs call this out:
 "some devices refuse to handle PGNs from devices which do not list them
 on transmit messages").
 
+### 5.1a Magnetic Variation (Bus-Sourced) and True Heading
+
+This firmware has no GPS and no geomagnetic model (§1.2's answer to
+"why is Variation empty" applies unless something changes that), but
+another device on the N2K bus — typically a GPS or chartplotter — often
+already broadcasts **PGN 127258 (Magnetic Variation)**. This firmware
+listens for that PGN and, when a recent value has been seen, uses it
+for two things it couldn't do on its own:
+
+- Fills PGN 127250's own Variation field with the bus-sourced value,
+  instead of always "not available."
+- Computes and publishes `navigation.headingTrue` to SignalK (§5.2):
+  `true heading = magnetic heading + variation`, using the SignalK/N2K
+  sign convention both already share (Easterly variation positive,
+  Westerly negative — no sign flip needed crossing between them).
+
+Deliberately passive and read-only: this firmware never transmits PGN
+127258 itself (it has no way to originate a variation value honestly —
+same "don't fabricate data" reasoning as PGN 127257's exclusion, §9.3),
+and never re-publishes the raw variation value to SignalK as its own
+delta (the source device broadcasting PGN 127258 is presumably already
+a legitimate variation source on any SignalK server bridging the same
+N2K bus; re-publishing it under this device's identity would just be
+a second, redundant source for the same data). If no device on the bus
+ever broadcasts PGN 127258, both effects simply never activate —
+Variation stays "not available" and `navigation.headingTrue` is never
+published, same as `navigation.rateOfTurn` before the estimator has
+enough samples (§5.1).
+
+`navigation.headingTrue` is independently toggleable (§7), same pattern
+as this firmware's other SignalK deltas, defaulting on — since it costs
+nothing to leave enabled and simply produces no data when no variation
+source exists on the bus.
+
 ### 5.2 SignalK Output
 
 Heading delta published as `navigation.headingMagnetic`, in **radians**
@@ -275,6 +312,9 @@ valid here, unlike the firmware's internal representation, §3). Rate of
 turn is published as `navigation.rateOfTurn`, also a standard SignalK
 key (rad/s, positive = starboard — same sign convention as PGN 127251,
 §5.1), sourced from the same `RateOfTurnEstimator` output.
+`navigation.headingTrue` (radians) is published when a recent bus-
+sourced magnetic variation is available (§5.1a) — omitted, not sent as
+a placeholder, when none is.
 
 Raw magnetic field is published as three independently-toggleable
 SignalK deltas: `sensors.hwt3100.magneticField.x/y/z`. There's no
@@ -326,15 +366,23 @@ firmware's pattern):
 - Enable/disable N2K output (master switch), plus PGN 127250 and PGN
   127251 independently on top of it (§5.1).
 - Enable/disable SignalK output (master switch), plus
-  `navigation.headingMagnetic`, `navigation.rateOfTurn`, and the raw
-  magnetic field deltas independently on top of it (§5.2) — same
-  master-plus-per-output pattern as the N2K side, for the same reason:
-  a single "SignalK on/off" switch doesn't let someone publish heading
-  without also publishing the (off-by-default) raw diagnostic field, or
-  turn off just rate of turn while keeping heading.
+  `navigation.headingMagnetic`, `navigation.rateOfTurn`,
+  `navigation.headingTrue` (§5.1a), and the raw magnetic field deltas
+  independently on top of it (§5.2) — same master-plus-per-output
+  pattern as the N2K side, for the same reason: a single "SignalK
+  on/off" switch doesn't let someone publish heading without also
+  publishing the (off-by-default) raw diagnostic field, or turn off
+  just rate of turn while keeping heading.
 - Calibration offset: heading.
 - On-module output filter/rate (`AT+FILT`/`AT+PRATE`, §8.2a/§8.2b) and
   UART baud rate (`AT+UART`, §8.2c).
+- Rate-of-turn window and minimum span (ARCHITECTURE.md §2.4a) —
+  previously compile-time constants, now tunable without a firmware
+  rebuild, since the right smoothing-vs-responsiveness trade-off is a
+  per-installation judgment call, not something this project can derive
+  once and bake in (§11 already flagged the defaults as needing
+  real-hardware tuning; making them configurable is a more durable fix
+  than guessing better constants).
 - WiFi credentials / SignalK server connection (standard SensESP config).
 
 ## 8. User Interface
@@ -596,6 +644,11 @@ which has none either).
 - Raw magnetic field as SignalK deltas
   (`sensors.hwt3100.magneticField.x/y/z`), independently toggleable
   (§5.2).
+- Bus-sourced magnetic variation (PGN 127258, listened for but never
+  transmitted): fills PGN 127250's Variation field and enables
+  `navigation.headingTrue`, both only when a source exists (§5.1a).
+- Rate-of-turn window/minimum-span tunable at runtime via config,
+  replacing the earlier compile-time constants (§7, §11).
 - OTA firmware upgrades (reusing SensESP's built-in OTA support).
 
 ### 9.2 Post-MVP / Deferred
@@ -803,12 +856,14 @@ SignalK output, baud-rate auto-detection) are now implemented; see
   enforcement isn't universal across the ecosystem regardless. Worth
   confirming what the intended consumer(s) for a given install actually
   do with it before relying on this as the only staleness signal.
-- The rate-of-turn sliding window length and minimum sample-span (chosen
-  in ARCHITECTURE.md §2 as reasonable defaults, not derived from a real
-  helm/autopilot's actual sensitivity requirements) may need tuning once
-  this runs against real hardware and a real display — too short and the
-  reading stays jittery/noisy, too long and it lags real turns. No live
-  hardware was available to tune this empirically during this pass.
+- The rate-of-turn sliding window length and minimum sample-span
+  defaults (2000ms/500ms, ARCHITECTURE.md §2.4a) are still not derived
+  from a real helm/autopilot's actual sensitivity requirements — too
+  short and the reading stays jittery/noisy, too long and it lags real
+  turns. Now configurable at runtime (§7) rather than requiring a
+  firmware rebuild to change, but the *right* values for a given
+  installation still need real-hardware tuning; this just makes that
+  tuning possible without a rebuild each time.
 
 Resolved during implementation (see ARCHITECTURE.md and
 docs/plans/gateway-wiring.md, docs/plans/fault-indication.md for
