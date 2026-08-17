@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+> **⚠️ Last version verified on real hardware: 0.2.2.** Everything from
+> 0.3.0 onward has been built and unit-tested (`pio run -e halser`,
+> `pio test -e native`) but not yet flashed to a real HWT3100 + HALSER
+> board. Treat 0.3.0+ features (UART auto-detection/switching, bus-
+> sourced magnetic variation, tunable rate-of-turn config, and
+> everything since) as unverified against actual hardware until this
+> note is updated or removed.
+
 ## [0.4.0] - 2026-08-17
 
 ### Added
