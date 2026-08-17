@@ -85,6 +85,18 @@ manual and the vendor's own Arduino SDK example (`wit_c_sdk.c`):
 > needs. `AT+MODE` is simply never implemented anywhere in this
 > codebase — not gated, not allowlisted-out, just absent. See §2 and §8.
 
+> **⚠️ Precautionary exclusion:** `AT+MRATE` and `AT+ID` are also never
+> implemented — **not** because either is confirmed to brick a unit like
+> `AT+MODE`, but because it's currently *unknown* whether they carry the
+> same risk, and this firmware has no functional need for either one to
+> take that chance. (`AT+ID` sets the module's Modbus address — an
+> address that's meaningless without also using `AT+MODE` to enter
+> Modbus mode, which is already permanently excluded above. `AT+MRATE`
+> configures Modbus active-output timing — same dependency on Modbus
+> mode.) If a real functional need for either ever arises, that requires
+> new hardware-verified research first, the same bar `AT+MODE` would
+> need to clear — not just adding a case to a switch statement.
+
 All N2K PGNs applicable to the data this firmware actually produces
 (heading and computed rate of turn — see §3) are implemented and
 individually selectable in the config UI — see §5.1 and §7.
@@ -356,9 +368,11 @@ ASCII mode):
 | `AT+CALI=0` | End calibration |
 | `AT+CALI=2` | Clear magnetic-field calibration offset (reset) |
 
-(`AT+UART`, `AT+PRATE`, `AT+ID` also exist in the manual but aren't
-calibration commands and aren't in scope for §8.2 — noted here for
-completeness, not implemented. `AT+FILT` *is* implemented, but as
+(`AT+UART`, `AT+PRATE` also exist in the manual but aren't calibration
+commands and aren't in scope for §8.2 — noted here for completeness,
+not implemented (deferred, §9.2). `AT+ID` and `AT+MRATE` are
+permanently excluded, not deferred — see the precautionary-exclusion
+callout in §1.2 and §9.3. `AT+FILT` *is* implemented, but as
 persisted config rather than a calibration action — see below.)
 
 ### 8.2a Output Filter (`AT+FILT`)
@@ -460,8 +474,12 @@ which has none either).
   compass, not an IMU/AHRS — it cannot produce this data (§1.2, §3).
   This is not something a future version of this firmware can add; it
   would require a different sensor.
-- **Modbus mode, `AT+MODE`, anything requiring it.** Not a capability
-  gap to fill later — a deliberate, permanent exclusion (§1.2, §2).
+- **Modbus mode, `AT+MODE`, anything requiring it — including
+  `AT+MRATE` and `AT+ID`.** Not a capability gap to fill later — a
+  deliberate, permanent exclusion (§1.2, §2). `AT+MODE` is excluded
+  because it's confirmed to brick a real unit; `AT+MRATE`/`AT+ID` are
+  excluded precautionarily (unconfirmed risk) and because both are
+  meaningless without Modbus mode anyway.
 
 ## 10. Design Decisions
 

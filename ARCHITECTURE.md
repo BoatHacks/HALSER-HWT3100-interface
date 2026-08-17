@@ -158,6 +158,17 @@ built via `tN2kMsg::Init()`/`AddByte()` (fast-packet, >8 bytes; the
 NMEA2000-library already handles this transparently based on message
 length, the same way the parent firmware's PGN 129029 GNSS sender does).
 
+### 2.2b Output Filter (`hwt3100_filter_command.h/.cpp`)
+
+`FormatFilterCommand()` (SPEC §8.2a) — pure, unit-tested function that
+clamps an integer to `[0, 999]` and formats `"AT+FILT=<n>\r\n"`, used by
+`HWT3100SerialIO::SetOutputFilter()` (2.1, §6). Config wiring lives in
+`gateway.cpp` (2.6): a single persisted `PersistingObservableValue<int>`
+sent to the module once at boot and again on every config change —
+unlike 2.2's one-shot calibration triggers, this isn't fire-and-reset,
+since the module can't report its current filter setting back and a
+reboot would otherwise silently drop it to `0`.
+
 ### 2.3 Calibration Offset
 
 Applies the configured heading offset to each `HeadingReading` before it
@@ -417,27 +428,39 @@ additional auth/encryption work scoped for this project (per SPEC's user
 decision).
 
 The hardware-specific rule that *is* a hard requirement, not a
-convention: **the firmware must never send `AT+MODE` to the HWT3100**
-(SPEC §1.2, §2) — `AT+MODE=1` has bricked a real unit. Unlike an earlier
-draft of this design (which treated this as "writes are allowed, but
-filtered"), the actual enforcement here is stronger: the firmware simply
-has no functional need for Modbus mode, so nothing implements it.
+convention: **the firmware must never send `AT+MODE`, `AT+MRATE`, or
+`AT+ID` to the HWT3100** (SPEC §1.2, §2, §9.3) — `AT+MODE=1` has
+confirmed-bricked a real unit; `AT+MRATE`/`AT+ID` are excluded
+precautionarily (unconfirmed risk) and because both are meaningless
+without Modbus mode anyway. Unlike an earlier draft of this design
+(which treated `AT+MODE` as "writes are allowed, but filtered"), the
+actual enforcement here is stronger: the firmware simply has no
+functional need for any of these three, so nothing implements them.
 
 - `Serial1` is owned exclusively by `HWT3100SerialIO` (2.1); no other
   component ever gets a reference to it.
-- `HWT3100SerialIO::SendCommand()` is the *only* method that writes to
-  `Serial1`, and it takes a closed `HWT3100Command` enum with exactly
-  three values (2.1, §3) — `kStartCalibration`, `kEndCalibration`,
-  `kClearCalibration`. There is no overload, no debug backdoor, no
-  "advanced mode" that accepts raw text, and **no enum value that maps to
-  `AT+MODE` at all** — not "filtered out," simply never defined.
-- The calibration command handler (2.2) is the only component holding a
-  reference to `SendCommand`; the serial terminal (2.5) and everything
-  else remain read-only, with no path to `Serial1` at all.
-- Because the enum is exhaustive and small (three values, all mapping to
-  known-safe `AT+CALI` variants), a code reviewer can verify the entire
-  write surface by reading `HWT3100Command`'s definition and
-  `SendCommand()`'s lookup table — both fit on one screen.
+- `HWT3100SerialIO` exposes exactly two write methods, and they are the
+  *only* code in this firmware that writes to `Serial1`:
+  - `SendCommand()` takes a closed `HWT3100Command` enum with exactly
+    three values (2.1, §3) — `kStartCalibration`, `kEndCalibration`,
+    `kClearCalibration`. No overload, no debug backdoor, no "advanced
+    mode" that accepts raw text, and **no enum value that maps to
+    `AT+MODE`, `AT+MRATE`, or `AT+ID` at all** — not "filtered out,"
+    simply never defined.
+  - `SetOutputFilter(int)` (§2.2b) is the one parameterized exception:
+    it only ever constructs `"AT+FILT=<n>\r\n"` with `n` clamped to
+    `[0, 999]` by `FormatFilterCommand()` before anything reaches the
+    wire (SPEC §8.2a) — a bounded numeric command, not a raw-text
+    backdoor.
+- The calibration command handler (2.2) and the output-filter config
+  wiring (2.2b, gateway.cpp) are the only components holding a
+  reference to these write methods; the serial terminal (2.5) and
+  everything else remain read-only, with no path to `Serial1` at all.
+- Because both the enum and the filter command's valid range are
+  small, closed, and clamped, a code reviewer can verify the entire
+  write surface by reading `HWT3100Command`'s definition,
+  `SendCommand()`'s lookup table, and `FormatFilterCommand()` — all fit
+  on one screen combined.
 
 ## 7. File Structure
 
