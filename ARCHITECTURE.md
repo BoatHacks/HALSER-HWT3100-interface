@@ -384,26 +384,31 @@ action.
 ### 2.7 SignalK Delta Sender
 
 Publishes `navigation.headingMagnetic`, `navigation.rateOfTurn`, and
-(if `raw_mag_field_enabled`) `sensors.hwt3100.magneticField.x/y/z` via
-SensESP's existing SignalK/WiFi transport, gated by the SignalK master
-enable flag (2.6). Uses the same corrected `HeadingReading` as the N2K
-sender (2.4) — single source of truth, per SPEC §2. Heading/rate-of-
-turn are in radians (rad and rad/s respectively), converted from the
-firmware's internal degrees representation right at this boundary
-(SPEC §3, §5.2 — an earlier version of the heading sender sent raw
-degrees, a real bug caught while wiring up the `meta.timeout` units
-field below). `navigation.rateOfTurn` is only set when
-`RateOfTurnEstimator` actually has a value (SPEC §5.1) — same gate as
-the N2K PGN 127251 sender, same sign convention (positive = starboard).
+`sensors.hwt3100.magneticField.x/y/z` via SensESP's existing
+SignalK/WiFi transport. Each has its own enable flag
+(`sk_heading_enabled`, `sk_rate_of_turn_enabled`,
+`raw_mag_field_enabled`) checked *in addition to* the SignalK master
+enable flag (2.6) — same master-plus-per-output pattern as the N2K
+senders (2.4), so disabling one delta doesn't require disabling
+SignalK entirely, and vice versa. Uses the same corrected
+`HeadingReading` as the N2K sender (2.4) — single source of truth, per
+SPEC §2. Heading/rate-of-turn are in radians (rad and rad/s
+respectively), converted from the firmware's internal degrees
+representation right at this boundary (SPEC §3, §5.2 — an earlier
+version of the heading sender sent raw degrees, a real bug caught
+while wiring up the `meta.timeout` units field below).
+`navigation.rateOfTurn` is only set when `RateOfTurnEstimator`
+actually has a value (SPEC §5.1) — same gate as the N2K PGN 127251
+sender, same sign convention (positive = starboard).
 
 The raw magnetic field outputs are the one exception to "converted at
 the output boundary": `mag_x/y/z` are published as-is, the module's
 raw sensor counts, with no unit in their `SKMetadata` (the manual
 doesn't document a counts-to-µT conversion factor) and no calibration
 offset applied (§2.3 only corrects `heading`, per SPEC §3's note that
-the raw field is diagnostic-only). Gated behind its own toggle in
-addition to the SignalK master flag (SPEC §5.2) — off by default,
-unlike heading/rate-of-turn.
+the raw field is diagnostic-only). `raw_mag_field_enabled` defaults to
+off, unlike `sk_heading_enabled`/`sk_rate_of_turn_enabled`, which
+default to on (matching their N2K per-PGN counterparts).
 
 All outputs are constructed with an `SKMetadata` carrying the
 appropriate `units` (`"rad"` / `"rad/s"` / none) and `timeout_=5.0`

@@ -323,11 +323,18 @@ itself, and not an active alarm/notification.
 User-tunable, exposed via the SensESP web UI (reusing the parent
 firmware's pattern):
 
-- Enable/disable N2K output (independently of SignalK output).
-- Enable/disable PGN 127250 specifically (independent of the master N2K
-  switch — see §5.1 for why this matters more as the PGN set grows).
-- Enable/disable SignalK output (independently of N2K output).
+- Enable/disable N2K output (master switch), plus PGN 127250 and PGN
+  127251 independently on top of it (§5.1).
+- Enable/disable SignalK output (master switch), plus
+  `navigation.headingMagnetic`, `navigation.rateOfTurn`, and the raw
+  magnetic field deltas independently on top of it (§5.2) — same
+  master-plus-per-output pattern as the N2K side, for the same reason:
+  a single "SignalK on/off" switch doesn't let someone publish heading
+  without also publishing the (off-by-default) raw diagnostic field, or
+  turn off just rate of turn while keeping heading.
 - Calibration offset: heading.
+- On-module output filter/rate (`AT+FILT`/`AT+PRATE`, §8.2a/§8.2b) and
+  UART baud rate (`AT+UART`, §8.2c).
 - WiFi credentials / SignalK server connection (standard SensESP config).
 
 ## 8. User Interface

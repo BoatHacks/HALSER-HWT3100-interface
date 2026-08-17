@@ -144,6 +144,27 @@ void run_hwt3100_gateway() {
       ->set_config_schema(
           R"schema({"type":"object","properties":{"value":{"title":"Enabled","type":"boolean"}}})schema");
 
+  // Per-delta toggles (SPEC.md §5.2, §7), same pattern as the N2K
+  // per-PGN toggles above — each independently gated on top of the
+  // signalk_enabled master switch, not a replacement for it.
+  auto sk_heading_enabled = std::make_shared<PersistingObservableValue<bool>>(
+      true, "/signalk/heading_enabled");
+  ConfigItem(sk_heading_enabled)
+      ->set_title("Enable navigation.headingMagnetic")
+      ->set_sort_order(121)
+      ->set_config_schema(
+          R"schema({"type":"object","properties":{"value":{"title":"Enabled","type":"boolean"}}})schema");
+
+  auto sk_rate_of_turn_enabled = std::make_shared<PersistingObservableValue<bool>>(
+      true, "/signalk/rate_of_turn_enabled");
+  ConfigItem(sk_rate_of_turn_enabled)
+      ->set_title("Enable navigation.rateOfTurn")
+      ->set_description(
+          "Computed from a sliding window of heading readings (SPEC.md §5.1) — the HWT3100 has no gyroscope.")
+      ->set_sort_order(122)
+      ->set_config_schema(
+          R"schema({"type":"object","properties":{"value":{"title":"Enabled","type":"boolean"}}})schema");
+
   // Raw magnetic field as SignalK deltas (SPEC.md §5.2) — diagnostic
   // data with no established SignalK path, so it's off by default and
   // gated separately from signalk_enabled (both must be true to
@@ -156,7 +177,7 @@ void run_hwt3100_gateway() {
           "Publishes sensors.hwt3100.magneticField.x/y/z -- raw, "
           "uncalibrated sensor counts from the HWT3100 (SPEC.md §5.2). "
           "Diagnostic-only; off by default.")
-      ->set_sort_order(121)
+      ->set_sort_order(123)
       ->set_config_schema(
           R"schema({"type":"object","properties":{"value":{"title":"Enabled","type":"boolean"}}})schema");
 
@@ -358,7 +379,7 @@ void run_hwt3100_gateway() {
         // output boundary, not upstream.
         float heading_rad = corrected.heading * kDegreesToRadians;
         heading_sender->heading_.update(heading_rad);
-        if (signalk_enabled->get()) {
+        if (signalk_enabled->get() && sk_heading_enabled->get()) {
           sk_heading_output->set(heading_rad);
         }
 
@@ -366,7 +387,7 @@ void run_hwt3100_gateway() {
         float rate_of_turn = 0.0f;
         if (rate_of_turn_estimator->GetRateOfTurn(&rate_of_turn)) {
           rate_of_turn_sender->rate_of_turn_.update(rate_of_turn);
-          if (signalk_enabled->get()) {
+          if (signalk_enabled->get() && sk_rate_of_turn_enabled->get()) {
             sk_rate_of_turn_output->set(rate_of_turn);
           }
         }

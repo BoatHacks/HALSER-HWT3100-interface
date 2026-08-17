@@ -13,6 +13,10 @@ All notable changes to this project are documented in this file.
 - Raw magnetic field published as SignalK deltas
   (`sensors.hwt3100.magneticField.x/y/z`), independently toggleable,
   off by default.
+- `navigation.headingMagnetic` and `navigation.rateOfTurn` are now
+  independently toggleable in the config UI, on top of the existing
+  SignalK master enable switch — matching the N2K side's existing
+  master-plus-per-PGN pattern.
 
 ### Changed
 
