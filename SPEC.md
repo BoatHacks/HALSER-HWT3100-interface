@@ -358,6 +358,20 @@ control): setting one to true fires the corresponding command and it
 immediately resets itself to false. See ARCHITECTURE.md §2.6 for the
 mechanism and the accepted reboot-replay trade-off.
 
+SensESP's `UIButton` class (documented as creating a real button in the
+web UI's "Control" tab) was investigated as a nicer alternative to the
+check-a-box-then-Save mechanic, since that flow reads as confusing —
+checking a box looks like changing a persistent setting, not firing a
+one-shot action. It's not usable: neither the vendored SensESP version
+this project pins nor the current upstream `main` branch has any
+server-side HTTP handler that serves or consumes `UIButton`'s registry
+— the class exists, but nothing on the backend wires it to the web UI.
+Given that, the three items keep the config-toggle mechanism, with
+titles (`Calibration 1/3: Start` etc.) and identically-worded
+descriptions making the "check + Save, then it un-checks itself"
+behavior explicit on all three rather than assuming it's obvious from
+the first one alone.
+
 The full set of relevant commands, from the HWT3100-TTL/232 manual §5.3.1
 (all plain ASCII text, terminated `\r\n`, all operate without leaving
 ASCII mode):

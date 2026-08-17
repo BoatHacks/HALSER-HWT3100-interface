@@ -336,37 +336,54 @@ void run_hwt3100_gateway() {
   // nmea2000 via its tMsgHandler base constructor.
   new halser::MfdCalibrationBridge(nmea2000, calibration_commands);
 
+  // Three adjacent, consistently-worded actions (SPEC.md §8.2): each is
+  // a one-shot trigger, not a persistent setting — SensESP's config UI
+  // has no "button" primitive, so the mechanism is check-the-box, save,
+  // and it flips back to unchecked once the command fires (§10 Design
+  // Decisions covers the reboot-replay trade-off this accepts). The
+  // "1/2/3" title prefix and matching sort_order keep the three
+  // together and in the order you'd actually use them, and every
+  // description spells out the same "check + save, then it un-checks
+  // itself" mechanic so it reads the same way three times in a row
+  // rather than leaving it to be inferred from just the first one.
   auto start_calibration = std::make_shared<PersistingObservableValue<bool>>(
       false, "/hwt3100/calibration/start");
   ConfigItem(start_calibration)
-      ->set_title("Start Magnetic Calibration")
+      ->set_title("Calibration 1/3: Start")
       ->set_description(
-          "Set true to send AT+CALI=1. Rotate the module 2-3 full turns after starting.")
+          "One-shot action, not a setting: check the box and Save to send "
+          "AT+CALI=1 and begin calibration; it un-checks itself once sent. "
+          "Rotate the module through 2-3 full turns after starting.")
       ->set_sort_order(20)
       ->set_config_schema(
-          R"schema({"type":"object","properties":{"value":{"title":"Start","type":"boolean"}}})schema");
+          R"schema({"type":"object","properties":{"value":{"title":"Send AT+CALI=1","type":"boolean"}}})schema");
   WireCalibrationTrigger(start_calibration,
                          [calibration_commands]() { calibration_commands->StartCalibration(); });
 
   auto end_calibration = std::make_shared<PersistingObservableValue<bool>>(
       false, "/hwt3100/calibration/end");
   ConfigItem(end_calibration)
-      ->set_title("End Magnetic Calibration")
-      ->set_description("Set true to send AT+CALI=0.")
+      ->set_title("Calibration 2/3: End")
+      ->set_description(
+          "One-shot action, not a setting: check the box and Save to send "
+          "AT+CALI=0 and finish calibration; it un-checks itself once sent.")
       ->set_sort_order(21)
       ->set_config_schema(
-          R"schema({"type":"object","properties":{"value":{"title":"End","type":"boolean"}}})schema");
+          R"schema({"type":"object","properties":{"value":{"title":"Send AT+CALI=0","type":"boolean"}}})schema");
   WireCalibrationTrigger(end_calibration,
                          [calibration_commands]() { calibration_commands->EndCalibration(); });
 
   auto clear_calibration = std::make_shared<PersistingObservableValue<bool>>(
       false, "/hwt3100/calibration/clear");
   ConfigItem(clear_calibration)
-      ->set_title("Clear Magnetic Calibration")
-      ->set_description("Set true to send AT+CALI=2 (resets the module's magnetic offset).")
+      ->set_title("Calibration 3/3: Clear")
+      ->set_description(
+          "One-shot action, not a setting: check the box and Save to send "
+          "AT+CALI=2 and reset the module's magnetic offset; it un-checks "
+          "itself once sent.")
       ->set_sort_order(22)
       ->set_config_schema(
-          R"schema({"type":"object","properties":{"value":{"title":"Clear","type":"boolean"}}})schema");
+          R"schema({"type":"object","properties":{"value":{"title":"Send AT+CALI=2","type":"boolean"}}})schema");
   WireCalibrationTrigger(clear_calibration,
                          [calibration_commands]() { calibration_commands->ClearCalibration(); });
 
