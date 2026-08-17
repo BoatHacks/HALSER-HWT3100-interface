@@ -232,7 +232,10 @@ encoding are worked out in ARCHITECTURE.md.
 
 Heading delta published as `navigation.headingMagnetic`, in **radians**
 per the SignalK spec (all SignalK angles are SI units — degrees is not
-valid here, unlike the firmware's internal representation, §3). Raw
+valid here, unlike the firmware's internal representation, §3). Rate of
+turn is published as `navigation.rateOfTurn`, also a standard SignalK
+key (rad/s, positive = starboard — same sign convention as PGN 127251,
+§5.1), sourced from the same `RateOfTurnEstimator` output. Raw
 magnetic field readings are not published as SignalK deltas in MVP —
 there's no established SignalK path for a raw 3-axis magnetic field
 vector on a vessel, and no known consumer for one (§10 Design

@@ -28,11 +28,11 @@ HWT3100-TTL  ◄─────────────────────�
    │                             ▼                  ▼
    │                   RateOfTurnEstimator   SignalK delta sender
    │                   (sliding window,      (navigation.headingMagnetic,
-   │                   §2.4a)                SensESP, WiFi)
-   │                             │                  │
-   │             ┌───────────────┴───────┐          ▼
-   │             ▼                       ▼   SignalK server (WiFi)
-   │   N2K senders: PGN 127250    PGN 127251
+   │                   §2.4a)                navigation.rateOfTurn,
+   │                             │           SensESP, WiFi)
+   │             ┌───────────────┴───────┐          │
+   │             ▼                       ▼          ▼
+   │   N2K senders: PGN 127250    PGN 127251  SignalK server (WiFi)
    │   (heading), ExpiringValue   (rate of turn),
    │   pattern                    ExpiringValue pattern
    │             │                       │
@@ -294,26 +294,30 @@ action.
 
 ### 2.7 SignalK Delta Sender
 
-Publishes `navigation.headingMagnetic` via SensESP's existing
-SignalK/WiFi transport, gated by the SignalK master enable flag (2.6).
-Uses the same corrected `HeadingReading` as the N2K sender (2.4) — single
-source of truth, per SPEC §2. Radians, converted from the firmware's
-internal degrees representation right at this boundary (SPEC §3, §5.2 —
-an earlier version of this sender sent raw degrees, a real bug caught
-while wiring up the `meta.timeout` units field below). Raw magnetic
-field is not published here (SPEC §5.2, §10) — it's diagnostic-only,
-visible via 2.5.
+Publishes `navigation.headingMagnetic` and `navigation.rateOfTurn` via
+SensESP's existing SignalK/WiFi transport, gated by the SignalK master
+enable flag (2.6). Uses the same corrected `HeadingReading` as the N2K
+sender (2.4) — single source of truth, per SPEC §2. Both in radians
+(rad and rad/s respectively), converted from the firmware's internal
+degrees representation right at this boundary (SPEC §3, §5.2 — an
+earlier version of the heading sender sent raw degrees, a real bug
+caught while wiring up the `meta.timeout` units field below).
+`navigation.rateOfTurn` is only set when `RateOfTurnEstimator` actually
+has a value (SPEC §5.1) — same gate as the N2K PGN 127251 sender, same
+sign convention (positive = starboard). Raw magnetic field is not
+published here (SPEC §5.2, §10) — it's diagnostic-only, visible via 2.5.
 
-Constructed with an `SKMetadata` carrying `units="rad"` and
-`timeout_=5.0` (matching `N2kHeadingSender`'s own `ExpiringValue`
-window) — this `timeout_` field is SPEC §6's entire staleness mechanism
-on the SignalK side. No separate fault-indication component exists:
-SensESP's `SKMetadata` already has a first-class `timeout_` field, so
-this is one constructor argument, not new code. (An earlier version of
-this architecture had a dedicated `SKNotification`/`SKEmitter` subclass
-sending an active `notifications.*` alarm; replaced once `meta.timeout`
-was confirmed as the SignalK-spec-defined mechanism for exactly this —
-SPEC §10 covers the trade-off.)
+Both outputs are constructed with an `SKMetadata` carrying the
+appropriate `units` (`"rad"` / `"rad/s"`) and `timeout_=5.0` (matching
+the N2K senders' own `ExpiringValue` window) — this `timeout_` field is
+SPEC §6's entire staleness mechanism on the SignalK side. No separate
+fault-indication component exists: SensESP's `SKMetadata` already has a
+first-class `timeout_` field, so this is one constructor argument, not
+new code. (An earlier version of this architecture had a dedicated
+`SKNotification`/`SKEmitter` subclass sending an active
+`notifications.*` alarm; replaced once `meta.timeout` was confirmed as
+the SignalK-spec-defined mechanism for exactly this — SPEC §10 covers
+the trade-off.)
 
 ### 2.9 No Dedicated Fault LED
 

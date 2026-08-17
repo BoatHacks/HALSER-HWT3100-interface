@@ -185,6 +185,13 @@ void run_hwt3100_gateway() {
       "navigation.headingMagnetic", "/signalk/heading_path",
       new SKMetadata("rad", "", "", "", kHeadingTimeoutSeconds));
 
+  // navigation.rateOfTurn (rad/s, +ve = starboard) is a standard SignalK
+  // key (see SPEC.md §5.1 for the equivalent N2K PGN 127251) that this
+  // firmware previously computed but never published to SignalK.
+  auto sk_rate_of_turn_output = new SKOutputFloat(
+      "navigation.rateOfTurn", "/signalk/rate_of_turn_path",
+      new SKMetadata("rad/s", "", "", "", kHeadingTimeoutSeconds));
+
   // --- HWT3100 serial I/O, calibration offset, and dispatch to outputs ---
 
   auto heading_producer = new TaskQueueProducer<HeadingReading>(HeadingReading{});
@@ -226,6 +233,9 @@ void run_hwt3100_gateway() {
         float rate_of_turn = 0.0f;
         if (rate_of_turn_estimator->GetRateOfTurn(&rate_of_turn)) {
           rate_of_turn_sender->rate_of_turn_.update(rate_of_turn);
+          if (signalk_enabled->get()) {
+            sk_rate_of_turn_output->set(rate_of_turn);
+          }
         }
       }));
 
