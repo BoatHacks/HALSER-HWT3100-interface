@@ -8,6 +8,7 @@
 
 #include "hwt3100_filter_command.h"
 #include "hwt3100_parser.h"
+#include "hwt3100_prate_command.h"
 
 namespace halser {
 
@@ -67,6 +68,14 @@ void HWT3100SerialIO::SetOutputFilter(int value) {
   FormatFilterCommand(value, buf, sizeof(buf));
   serial_.print(buf);
 }
+
+void HWT3100SerialIO::SetOutputRate(int value) {
+  char buf[24];
+  FormatPrateCommand(value, buf, sizeof(buf));
+  serial_.print(buf);
+}
+
+void HWT3100SerialIO::QueryOutputRate() { serial_.print("AT+PRATE=?\r\n"); }
 
 void HWT3100SerialIO::ReadTaskTrampoline(void* arg) {
   static_cast<HWT3100SerialIO*>(arg)->ReadTaskLoop();

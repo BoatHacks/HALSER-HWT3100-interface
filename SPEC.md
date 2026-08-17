@@ -368,12 +368,12 @@ ASCII mode):
 | `AT+CALI=0` | End calibration |
 | `AT+CALI=2` | Clear magnetic-field calibration offset (reset) |
 
-(`AT+UART`, `AT+PRATE` also exist in the manual but aren't calibration
-commands and aren't in scope for §8.2 — noted here for completeness,
-not implemented (deferred, §9.2). `AT+ID` and `AT+MRATE` are
-permanently excluded, not deferred — see the precautionary-exclusion
-callout in §1.2 and §9.3. `AT+FILT` *is* implemented, but as
-persisted config rather than a calibration action — see below.)
+(`AT+UART` also exists in the manual but isn't a calibration command
+and isn't in scope for §8.2 — noted here for completeness, not
+implemented (deferred, §9.2). `AT+ID` and `AT+MRATE` are permanently
+excluded, not deferred — see the precautionary-exclusion callout in
+§1.2 and §9.3. `AT+FILT` and `AT+PRATE` *are* implemented, but as
+persisted config rather than calibration actions — see below.)
 
 ### 8.2a Output Filter (`AT+FILT`)
 
@@ -391,6 +391,44 @@ goes through `HWT3100SerialIO`'s allowlisted write surface: the value
 is clamped to `[0, 999]` before it's ever formatted into a command
 string, so this doesn't reopen the door to sending arbitrary text
 (ARCHITECTURE.md §6).
+
+### 8.2b Output Rate (`AT+PRATE`)
+
+Per the manual's AT-command table: `AT+PRATE=0` sets the module to
+**single-return mode**; `AT+PRATE=<n>` with `n` in `[10, 10000]` sets a
+periodic output interval in ms. Values in `(0, 10)` clamp up to `10`
+(the lowest valid periodic interval), not down to `0` — collapsing a
+small positive request into "stop streaming entirely" would be far
+more surprising than rounding up.
+
+> **⚠️ `AT+PRATE=0` silences the module's continuous ASCII stream.**
+> This firmware's entire read pipeline (§2, ARCHITECTURE §2.1) is
+> built around parsing unsolicited `Magx=...` lines as they arrive —
+> there is no request/response polling implemented anywhere. Setting
+> the rate to `0` via config does not crash anything, but it does stop
+> all heading data from ever arriving again until the rate is changed
+> back. The config UI's description field carries this warning; it is
+> not otherwise blocked, since a user might have a legitimate reason to
+> silence the stream temporarily (e.g. before disconnecting the module
+> for field service).
+
+Exposed as a single persisted integer config value, same
+apply-at-boot-and-on-change pattern as §8.2a's output filter — with one
+difference: **the persisted default is a sentinel meaning "unknown"
+(`-1`, `halser::kPrateUnknown`), not a real rate.** Forcing an
+assumed default the way §8.2a does for `AT+FILT` would risk silently
+overwriting whatever rate the module was already configured with
+(possibly by someone else, before this firmware was ever installed) —
+and if that assumed default happened to be wrong in the `0` direction,
+it would be actively harmful per the warning above. So at boot, if the
+persisted value is still `kPrateUnknown`, the firmware sends
+`AT+PRATE=?` instead of a real command, and learns the module's actual
+current rate from its `+PRATE=<n>` reply — which arrives on the same
+raw-line stream as ordinary heading data (there is no separate reply
+channel) and is parsed there. The learned value is then persisted
+(so future boots skip the query and just (re-)apply the known rate,
+same as §8.2a) and echoed back to the module as a confirming
+`AT+PRATE=<n>` (harmless — the module is already at that rate).
 
 Requirements:
 
@@ -455,13 +493,15 @@ which has none either).
   proprietary protocol, unverified against real hardware.
 - On-module output smoothing filter (`AT+FILT`), persisted config
   (§8.2a).
+- On-module output data rate (`AT+PRATE`), persisted config, learned
+  from the module at boot if not yet known (§8.2b).
 - OTA firmware upgrades (reusing SensESP's built-in OTA support).
 
 ### 9.2 Post-MVP / Deferred
 
-- `AT+UART` (runtime baud switching), `AT+PRATE` (return rate) exposed
-  as config — both documented, both ASCII-mode-safe, just not needed
-  yet. (`AT+FILT` was in this category too, until §8.2a.)
+- `AT+UART` (runtime baud switching) exposed as config — documented,
+  ASCII-mode-safe, just not needed yet. (`AT+FILT`/`AT+PRATE` were in
+  this category too, until §8.2a/§8.2b.)
 - Raw magnetic field as a SignalK delta or a custom N2K message, if a
   real consumer need shows up (§5.2, §10) — currently diagnostic-only.
 - Auto-detection of the HWT3100's baud rate. Deferred — MVP hardcodes

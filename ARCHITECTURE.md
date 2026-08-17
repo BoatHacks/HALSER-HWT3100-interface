@@ -169,6 +169,26 @@ unlike 2.2's one-shot calibration triggers, this isn't fire-and-reset,
 since the module can't report its current filter setting back and a
 reboot would otherwise silently drop it to `0`.
 
+### 2.2c Output Rate (`hwt3100_prate_command.h/.cpp`)
+
+`FormatPrateCommand()`/`ParsePrateReply()` (SPEC §8.2b) — pure,
+unit-tested functions used by `HWT3100SerialIO::SetOutputRate()`/
+`QueryOutputRate()` (2.1, §6). Config wiring in `gateway.cpp` (2.6)
+follows 2.2b's apply-at-boot-and-on-change pattern, with one addition:
+the persisted default is `halser::kPrateUnknown` (`-1`), not a real
+rate, since forcing an assumed default the way 2.2b does could
+silently overwrite whatever the module was already configured with —
+and if wrong in the `0` (single-return) direction, would silence the
+module's stream entirely. At boot, if the value is still
+`kPrateUnknown`, `gateway.cpp` sends the query instead of a set
+command; a second consumer attached to `raw_line_producer` (the same
+producer the serial terminal, 2.5, reads from) tries
+`ParsePrateReply()` on every incoming line and, while still
+`kPrateUnknown`, treats a match as the module's answer — persisting it
+via `output_prate->set()`, which in turn re-applies it through the
+same `connect_to()` used for config-UI-driven changes (a harmless echo
+of what the module just reported).
+
 ### 2.3 Calibration Offset
 
 Applies the configured heading offset to each `HeadingReading` before it
@@ -439,28 +459,33 @@ functional need for any of these three, so nothing implements them.
 
 - `Serial1` is owned exclusively by `HWT3100SerialIO` (2.1); no other
   component ever gets a reference to it.
-- `HWT3100SerialIO` exposes exactly two write methods, and they are the
-  *only* code in this firmware that writes to `Serial1`:
+- `HWT3100SerialIO` exposes exactly four write methods, and they are
+  the *only* code in this firmware that writes to `Serial1`:
   - `SendCommand()` takes a closed `HWT3100Command` enum with exactly
     three values (2.1, §3) — `kStartCalibration`, `kEndCalibration`,
     `kClearCalibration`. No overload, no debug backdoor, no "advanced
     mode" that accepts raw text, and **no enum value that maps to
     `AT+MODE`, `AT+MRATE`, or `AT+ID` at all** — not "filtered out,"
     simply never defined.
-  - `SetOutputFilter(int)` (§2.2b) is the one parameterized exception:
-    it only ever constructs `"AT+FILT=<n>\r\n"` with `n` clamped to
-    `[0, 999]` by `FormatFilterCommand()` before anything reaches the
-    wire (SPEC §8.2a) — a bounded numeric command, not a raw-text
-    backdoor.
-- The calibration command handler (2.2) and the output-filter config
-  wiring (2.2b, gateway.cpp) are the only components holding a
-  reference to these write methods; the serial terminal (2.5) and
-  everything else remain read-only, with no path to `Serial1` at all.
-- Because both the enum and the filter command's valid range are
-  small, closed, and clamped, a code reviewer can verify the entire
-  write surface by reading `HWT3100Command`'s definition,
-  `SendCommand()`'s lookup table, and `FormatFilterCommand()` — all fit
-  on one screen combined.
+  - `SetOutputFilter(int)` (§2.2b) constructs `"AT+FILT=<n>\r\n"` with
+    `n` clamped to `[0, 999]` by `FormatFilterCommand()` before
+    anything reaches the wire (SPEC §8.2a).
+  - `SetOutputRate(int)` (§2.2c) constructs `"AT+PRATE=<n>\r\n"` with
+    `n` clamped by `FormatPrateCommand()` to `{0} u [10, 10000]` (SPEC
+    §8.2b).
+  - `QueryOutputRate()` (§2.2c) sends the single fixed string
+    `"AT+PRATE=?\r\n"` — no parameter at all.
+  All four are bounded, closed-domain writes, not a raw-text backdoor.
+- The calibration command handler (2.2) and the output-filter/rate
+  config wiring (2.2b, 2.2c, gateway.cpp) are the only components
+  holding a reference to these write methods; the serial terminal (2.5)
+  and everything else remain read-only, with no path to `Serial1` at
+  all.
+- Because the enum and both numeric commands' valid ranges are small,
+  closed, and clamped, a code reviewer can verify the entire write
+  surface by reading `HWT3100Command`'s definition, `SendCommand()`'s
+  lookup table, `FormatFilterCommand()`, and `FormatPrateCommand()` —
+  all fit on one screen combined.
 
 ## 7. File Structure
 
@@ -559,11 +584,12 @@ bus (also optional/toggleable).
 
 ## 9. Future Considerations
 
-- Post-MVP config (`AT+UART`, `AT+PRATE`, `AT+FILT` — SPEC §9.2) would
-  extend `HWT3100Command` with more enum values mapping to more `AT+`
-  commands, following the same closed-enum pattern established in 2.1 —
-  the architecture doesn't need to change shape to accommodate this, and
-  each addition stays auditable the same way.
+- Post-MVP config (`AT+UART` — SPEC §9.2) would follow the same pattern
+  already established for `AT+FILT`/`AT+PRATE` (2.2b, 2.2c): a small
+  pure format/parse function plus one or two dedicated
+  `HWT3100SerialIO` methods, not a new generic/raw-text write path —
+  the architecture doesn't need to change shape to accommodate this,
+  and each addition stays auditable the same way.
 - If raw magnetic field ever gets a real consumer (SPEC §5.2, §9.2), it
   flows through the same `HeadingReading`-based pipeline already carrying
   it for diagnostics — no new sensor-side plumbing needed, just a new

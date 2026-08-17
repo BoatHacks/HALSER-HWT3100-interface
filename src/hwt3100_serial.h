@@ -15,10 +15,11 @@ namespace halser {
 // Runs a dedicated FreeRTOS task that reads the module's ASCII output,
 // parses it via ParseHWT3100Line() (hwt3100_parser.h), and marshals
 // results to the main SensESP loop. Also exposes the *only* write paths
-// to the module: SendCommand(), which accepts nothing but the three
-// closed HWT3100Command values, and SetOutputFilter(), which sends
-// AT+FILT with a bounds-clamped integer (SPEC.md §8.2/§9). There is
-// deliberately no method here that accepts raw bytes or arbitrary text.
+// to the module: SendCommand() (three closed HWT3100Command values),
+// SetOutputFilter() (AT+FILT with a bounds-clamped integer), and
+// SetOutputRate()/QueryOutputRate() (AT+PRATE, same clamping approach —
+// SPEC.md §8.2a/§8.2b, §9). There is deliberately no method here that
+// accepts raw bytes or arbitrary text.
 class HWT3100SerialIO {
  public:
   // heading_producer/raw_line_producer must outlive this object and the
@@ -42,6 +43,18 @@ class HWT3100SerialIO {
   // one parameterized write this class allows, still not a raw-text
   // backdoor (SPEC.md §8.2/§9, ARCHITECTURE.md §6).
   void SetOutputFilter(int value);
+
+  // Sends AT+PRATE=<value>, clamped by FormatPrateCommand()
+  // (hwt3100_prate_command.h) to {0} u [10, 10000] before anything
+  // reaches the wire (SPEC.md §8.2b).
+  void SetOutputRate(int value);
+
+  // Sends the fixed query "AT+PRATE=?\r\n" to ask the module for its
+  // current output rate (SPEC.md §8.2b). The module's "+PRATE=<n>\r\n"
+  // reply arrives like any other line on raw_line_producer — there is
+  // no separate reply channel — and is parsed by the caller
+  // (gateway.cpp) via ParsePrateReply() (hwt3100_prate_command.h).
+  void QueryOutputRate();
 
  private:
   static void ReadTaskTrampoline(void* arg);

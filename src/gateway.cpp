@@ -7,6 +7,7 @@
 #include "calibration_offset.h"
 #include "halser_const.h"
 #include "hwt3100_calibration_commands.h"
+#include "hwt3100_prate_command.h"
 #include "hwt3100_serial.h"
 #include "hwt3100_types.h"
 #include "mfd_calibration_bridge.h"
@@ -146,6 +147,28 @@ void run_hwt3100_gateway() {
       ->set_config_schema(
           R"schema({"type":"object","properties":{"value":{"title":"Filter","type":"integer","minimum":0,"maximum":999}}})schema");
 
+  // AT+PRATE (SPEC.md §8.2b): on-module output data rate. Persisted so
+  // a reboot re-applies it, same as output_filter above — except this
+  // one starts life unknown (halser::kPrateUnknown = -1, outside the
+  // real {0} u [10,10000] domain), since forcing an arbitrary default
+  // here could be actively harmful: AT+PRATE=0 puts the module into
+  // single-return mode, silencing the continuous stream this firmware's
+  // entire read pipeline depends on. Startup wiring below queries the
+  // module instead of guessing whenever this is still kPrateUnknown.
+  auto output_prate = std::make_shared<PersistingObservableValue<int>>(
+      halser::kPrateUnknown, "/hwt3100/output_prate");
+  ConfigItem(output_prate)
+      ->set_title("HWT3100 Output Rate (AT+PRATE, ms)")
+      ->set_description(
+          "Module's own output interval in ms. -1 = not yet known; queried "
+          "from the sensor automatically at boot. 10-10000 = periodic "
+          "interval in ms. 0 = single-return mode -- WARNING: this disables "
+          "the continuous data stream this firmware depends on; only set "
+          "this if you understand the consequences.")
+      ->set_sort_order(56)
+      ->set_config_schema(
+          R"schema({"type":"object","properties":{"value":{"title":"Rate (ms)","type":"integer","minimum":-1,"maximum":10000}}})schema");
+
   // --- NMEA 2000 (CAN bus via TWAI) ---
 
   // Identifies as a B&G Precision-9 (SPEC.md §1.2, §5.1, §10) — product
@@ -226,6 +249,21 @@ void run_hwt3100_gateway() {
   raw_line_producer->connect_to(new LambdaConsumer<HWT3100RawLine>(
       [serial_terminal](HWT3100RawLine line) { serial_terminal->AddLine(line); }));
 
+  // AT+PRATE=? reply handling (SPEC.md §8.2b): the module's "+PRATE=<n>"
+  // response arrives on this same raw-line stream, like any other line
+  // — there's no separate reply channel. Only accepted while
+  // output_prate is still kPrateUnknown, so a stray/unexpected
+  // "+PRATE=" line can never silently override an already-known
+  // (learned or user-configured) value.
+  raw_line_producer->connect_to(new LambdaConsumer<HWT3100RawLine>(
+      [output_prate](HWT3100RawLine line) {
+        if (output_prate->get() != halser::kPrateUnknown) return;
+        int learned = 0;
+        if (halser::ParsePrateReply(line.text, &learned)) {
+          output_prate->set(learned);
+        }
+      }));
+
   auto rate_of_turn_estimator = new halser::RateOfTurnEstimator(
       kRateOfTurnWindowMs, kRateOfTurnMinSpanMs);
 
@@ -265,6 +303,26 @@ void run_hwt3100_gateway() {
   hwt3100_serial->SetOutputFilter(output_filter->get());
   output_filter->connect_to(new LambdaConsumer<int>(
       [hwt3100_serial](int value) { hwt3100_serial->SetOutputFilter(value); }));
+
+  // AT+PRATE (SPEC.md §8.2b): if the persisted rate is still unknown,
+  // query the module instead of guessing — forcing an arbitrary default
+  // here could be actively harmful (AT+PRATE=0 silences the continuous
+  // stream this firmware's read pipeline depends on). The reply is
+  // picked up by the raw-line consumer above; once parsed, it's
+  // persisted via output_prate->set(), which also re-applies it through
+  // the connect_to() below (a harmless echo of what the module just
+  // told us). If the rate is already known (learned on a previous boot,
+  // or set explicitly via config), (re-)apply it directly instead.
+  if (output_prate->get() == halser::kPrateUnknown) {
+    hwt3100_serial->QueryOutputRate();
+  } else {
+    hwt3100_serial->SetOutputRate(output_prate->get());
+  }
+  output_prate->connect_to(new LambdaConsumer<int>([hwt3100_serial](int value) {
+    if (value != halser::kPrateUnknown) {
+      hwt3100_serial->SetOutputRate(value);
+    }
+  }));
 
   // --- Calibration commands (SPEC.md §8.2) ---
 
