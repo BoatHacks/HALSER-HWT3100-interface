@@ -21,6 +21,15 @@ All notable changes to this project are documented in this file.
   auto-detection resolves the chicken-and-egg problem that used to
   make it mandatory.
 
+### Fixed
+
+- PGN 127250/127251 are now correctly declared via
+  `ExtendTransmitMessages()`, so PGN 126464 ("PGN List") queries
+  report them. Previously only the NMEA2000-library's own automatic
+  boilerplate PGNs were reported, which some MFDs/tools may have used
+  to decide this device isn't a valid heading/rate-of-turn source even
+  though the data was genuinely on the bus.
+
 ## [0.2.2] - 2026-08-17
 
 ### Removed

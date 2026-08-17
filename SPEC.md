@@ -257,6 +257,16 @@ this applies to both PGNs, including when there isn't yet enough heading
 history to compute a rate of turn. Exact transmission rate and field
 encoding are worked out in ARCHITECTURE.md.
 
+Both PGNs are declared to `ExtendTransmitMessages()` (ARCHITECTURE.md
+§2.6) so PGN 126464 ("PGN List — Transmit") correctly reports them —
+without this, the NMEA2000-library only reports its own automatic
+boilerplate (address claim, heartbeat, product/config info), and a
+device that doesn't declare what it actually transmits risks some
+MFDs/tools not recognizing it as a data source for that PGN even though
+it's genuinely on the bus (the library's own docs call this out:
+"some devices refuse to handle PGNs from devices which do not list them
+on transmit messages").
+
 ### 5.2 SignalK Output
 
 Heading delta published as `navigation.headingMagnetic`, in **radians**

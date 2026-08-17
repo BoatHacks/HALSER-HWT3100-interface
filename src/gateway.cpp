@@ -29,6 +29,16 @@ namespace {
 
 tNMEA2000* nmea2000 = nullptr;
 
+// PGNs this firmware actually transmits, beyond the NMEA2000-library's
+// own boilerplate (address claim, heartbeat, product/config info,
+// which it reports automatically). Passed to ExtendTransmitMessages()
+// so PGN 126464 ("PGN List - Transmit") queries — and any MFD/tool
+// that uses that list to decide what data sources a device offers —
+// see 127250/127251 too, not just the boilerplate set. 0-terminated
+// per the library's own convention; must outlive the call (the library
+// stores the pointer, not a copy), hence file-scope rather than local.
+const unsigned long kTransmitMessages[] PROGMEM = {127250L, 127251L, 0};
+
 // Rate-of-turn sliding window (SPEC.md §11 flags these as reasonable
 // defaults needing real-hardware tuning, not values derived from an
 // actual helm/autopilot's sensitivity requirements).
@@ -248,6 +258,7 @@ void run_hwt3100_gateway() {
   );
   nmea2000->SetMode(tNMEA2000::N2km_NodeOnly, 74);
   nmea2000->EnableForward(false);
+  nmea2000->ExtendTransmitMessages(kTransmitMessages);
   nmea2000->Open();
 
   // Process N2K messages (address claim, heartbeat, etc.)

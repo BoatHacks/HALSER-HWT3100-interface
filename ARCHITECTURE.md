@@ -270,6 +270,18 @@ Each sender has its own enable/disable flag (config, 2.6) checked before
 `ExpiringValue` staleness mechanism — "disabled" and "stale" are
 different states (disabled = never sends; stale = sends N/A values).
 
+Both PGNs are also declared to `tNMEA2000::ExtendTransmitMessages()`
+(a file-scope `const unsigned long[]`, `{127250L, 127251L, 0}`,
+0-terminated per the library's convention — must outlive the call
+since the library stores the pointer, not a copy) right after
+`SetMode()`/before `Open()` in `gateway.cpp`'s N2K setup. Without this,
+the library only reports its own automatic boilerplate PGNs (address
+claim, heartbeat, product/config info) in response to PGN 126464 ("PGN
+List — Transmit") queries — a real gap that went unnoticed until
+directly observed against real hardware/tooling, not something caught
+by the native unit tests (this is device-setup wiring, not pure logic,
+so it was never in scope for them).
+
 ### 2.4a Rate of Turn Estimator (`rate_of_turn.h/.cpp`, class `RateOfTurnEstimator`)
 
 Pure logic, no Arduino dependency (same split rationale as the HWT3100
