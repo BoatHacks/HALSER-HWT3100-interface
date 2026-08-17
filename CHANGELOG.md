@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.2.0] - 2026-08-17
+
+### Added
+
+- Rate of turn now published to SignalK as `navigation.rateOfTurn`
+  (rad/s, +ve = starboard), alongside the existing N2K PGN 127251.
+- `AT+FILT` (on-module output smoothing filter) exposed as persisted
+  config: 0 = off, 1-999 = filter strength.
+- `AT+PRATE` (on-module output data rate) exposed as persisted config,
+  auto-detected from the sensor at first boot if not yet known, so the
+  firmware never has to guess a value that could silence the module's
+  continuous data stream.
+
+### Changed
+
+- Firmware now requires the HWT3100 module to be pre-configured to
+  115200 baud (`AT+UART=1`) before wiring to HALSER, and only supports
+  the HWT3100-**TTL** variant (not -232/-485).
+
+### Fixed
+
+- Corrected the documented/implemented `AT+FILT` range to `[0, 999]`
+  (no `AT+FILT=1000` exists in the real command set).
+
+### Security
+
+- Documented `AT+MRATE` and `AT+ID` as permanently excluded, alongside
+  `AT+MODE` — unconfirmed bricking risk, and both are meaningless
+  without the already-excluded Modbus mode.
+
 ## [0.1.1] - 2026-08-16
 
 ### Added
