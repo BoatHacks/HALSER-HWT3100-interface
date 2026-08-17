@@ -25,14 +25,6 @@ static void test_zero_is_off_not_clamped(void) {
   TEST_ASSERT_EQUAL_STRING("AT+FILT=0\r\n", buf);
 }
 
-static void test_one_thousand_is_off_not_clamped(void) {
-  // 1000 is the other "no filter" sentinel the manual documents.
-  char buf[24];
-  uint16_t clamped = FormatFilterCommand(1000, buf, sizeof(buf));
-  TEST_ASSERT_EQUAL_UINT16(1000, clamped);
-  TEST_ASSERT_EQUAL_STRING("AT+FILT=1000\r\n", buf);
-}
-
 static void test_negative_clamps_to_zero(void) {
   char buf[24];
   uint16_t clamped = FormatFilterCommand(-5, buf, sizeof(buf));
@@ -40,11 +32,21 @@ static void test_negative_clamps_to_zero(void) {
   TEST_ASSERT_EQUAL_STRING("AT+FILT=0\r\n", buf);
 }
 
-static void test_over_max_clamps_to_one_thousand(void) {
+static void test_over_max_clamps_to_999(void) {
+  // There is no AT+FILT=1000 in the documented command set (only
+  // AT+FILT=0 and AT+FILT=<1-999>) - anything above 999 clamps down to
+  // the actual maximum, 999.
   char buf[24];
   uint16_t clamped = FormatFilterCommand(5000, buf, sizeof(buf));
-  TEST_ASSERT_EQUAL_UINT16(1000, clamped);
-  TEST_ASSERT_EQUAL_STRING("AT+FILT=1000\r\n", buf);
+  TEST_ASSERT_EQUAL_UINT16(999, clamped);
+  TEST_ASSERT_EQUAL_STRING("AT+FILT=999\r\n", buf);
+}
+
+static void test_one_thousand_clamps_to_999(void) {
+  char buf[24];
+  uint16_t clamped = FormatFilterCommand(1000, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_UINT16(999, clamped);
+  TEST_ASSERT_EQUAL_STRING("AT+FILT=999\r\n", buf);
 }
 
 static void test_boundary_one(void) {
@@ -65,9 +67,9 @@ int main(int argc, char** argv) {
   UNITY_BEGIN();
   RUN_TEST(test_typical_value);
   RUN_TEST(test_zero_is_off_not_clamped);
-  RUN_TEST(test_one_thousand_is_off_not_clamped);
   RUN_TEST(test_negative_clamps_to_zero);
-  RUN_TEST(test_over_max_clamps_to_one_thousand);
+  RUN_TEST(test_over_max_clamps_to_999);
+  RUN_TEST(test_one_thousand_clamps_to_999);
   RUN_TEST(test_boundary_one);
   RUN_TEST(test_boundary_999);
   return UNITY_END();

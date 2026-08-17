@@ -363,19 +363,18 @@ persisted config rather than a calibration action — see below.)
 
 ### 8.2a Output Filter (`AT+FILT`)
 
-Per the manual §5.3.1: `AT+FILT=<n>` sets the module's own output
-smoothing filter. `n` in `[1, 999]` sets the filter strength — smaller
-values smooth more. `n = 0` and `n = 1000` are both valid to send but
-the manual documents them as "not to set the filter" (no smoothing;
-`0` is the module's own default).
+Per the manual's AT-command table: `AT+FILT=0` closes/disables the
+module's output smoothing filter (module default); `AT+FILT=<n>` with
+`n` in `[1, 999]` sets the filter strength — smaller values smooth
+more. There is no `AT+FILT=1000` in the documented command set.
 
-Exposed as a single persisted integer config value (`0-1000`,
+Exposed as a single persisted integer config value (`0-999`,
 clamped), sent to the module once at boot and again on every config
 change — unlike §8.2's calibration actions, this isn't a one-shot
 trigger, since the module doesn't report its current filter setting
 back and a reboot would otherwise silently revert it to `0`. Still
 goes through `HWT3100SerialIO`'s allowlisted write surface: the value
-is clamped to `[0, 1000]` before it's ever formatted into a command
+is clamped to `[0, 999]` before it's ever formatted into a command
 string, so this doesn't reopen the door to sending arbitrary text
 (ARCHITECTURE.md §6).
 

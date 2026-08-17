@@ -130,21 +130,21 @@ void run_hwt3100_gateway() {
       ->set_config_schema(
           R"schema({"type":"object","properties":{"value":{"title":"Offset (degrees)","type":"number"}}})schema");
 
-  // AT+FILT (SPEC.md §8.2, §9): on-module output smoothing filter.
-  // 1-999 sets the filter strength (smaller = smoother); 0 and 1000 are
-  // both valid to send but mean "no filter" per the manual. Persisted
-  // so a reboot re-applies it (module has no way to report its current
-  // setting back to us).
+  // AT+FILT (SPEC.md §8.2a): on-module output smoothing filter.
+  // AT+FILT=0 closes the filter (module default); AT+FILT=<1-999> sets
+  // the filter strength (smaller = smoother). Persisted so a reboot
+  // re-applies it (module has no way to report its current setting
+  // back to us).
   auto output_filter = std::make_shared<PersistingObservableValue<int>>(
       0, "/hwt3100/output_filter");
   ConfigItem(output_filter)
       ->set_title("HWT3100 Output Filter (AT+FILT)")
       ->set_description(
-          "On-module smoothing filter. 0 or 1000 = off (module default). "
+          "On-module smoothing filter. 0 = off/closed (module default). "
           "1-999 = filter strength; smaller values smooth more.")
       ->set_sort_order(55)
       ->set_config_schema(
-          R"schema({"type":"object","properties":{"value":{"title":"Filter","type":"integer","minimum":0,"maximum":1000}}})schema");
+          R"schema({"type":"object","properties":{"value":{"title":"Filter","type":"integer","minimum":0,"maximum":999}}})schema");
 
   // --- NMEA 2000 (CAN bus via TWAI) ---
 

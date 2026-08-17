@@ -37,7 +37,7 @@ class HWT3100SerialIO {
   // overload, no debug backdoor (ARCHITECTURE.md §6).
   void SendCommand(HWT3100Command cmd);
 
-  // Sends AT+FILT=<value>, clamped to [0, 1000] by FormatFilterCommand()
+  // Sends AT+FILT=<value>, clamped to [0, 999] by FormatFilterCommand()
   // (hwt3100_filter_command.h) before anything reaches the wire — the
   // one parameterized write this class allows, still not a raw-text
   // backdoor (SPEC.md §8.2/§9, ARCHITECTURE.md §6).
