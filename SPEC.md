@@ -326,6 +326,10 @@ non-standard sensor data. Values are the module's raw, uncalibrated
 sensor counts (same `mag_x/y/z` fields already visible via the serial
 terminal, §8.1) — no unit is published in `SKMetadata` for them, since
 the HWT3100 manual doesn't document a counts-to-µT conversion factor.
+`display_name`/`short_name`/`description` are filled in for all three
+(`"Mag X"`/`"MagX"` etc.), since SignalK requires every non-standard
+path to carry a `description`, and there's nothing else for a consumer
+to show without a `display_name`.
 No corresponding N2K message was added: there is no standard PGN for
 raw magnetometer data, and inventing a proprietary one would have no
 real consumer on the bus (unlike PGN 130850/130851 in §8.3, which

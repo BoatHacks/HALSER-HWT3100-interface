@@ -370,16 +370,37 @@ void run_hwt3100_gateway() {
   // Raw magnetic field (SPEC.md §5.2): custom sensors.* paths, no
   // established standard, no unit (the manual doesn't document a
   // counts-to-µT conversion factor) — raw sensor counts as-is, same
-  // values already visible via the serial terminal (§8.1).
+  // values already visible via the serial terminal (§8.1). description_
+  // is filled in on all three since SignalK requires it for any
+  // non-standard path (SKMetadata's own doc comment); display_name_/
+  // short_name_ likewise, since consumers have nothing else to show.
   auto sk_mag_x_output = new SKOutputFloat(
       "sensors.hwt3100.magneticField.x", "/signalk/mag_x_path",
-      new SKMetadata("", "", "", "", kHeadingTimeoutSeconds));
+      new SKMetadata(
+          "", "Mag X",
+          "Raw, uncalibrated magnetic field X-axis reading from the "
+          "HWT3100 compass module, in sensor counts -- the manual "
+          "doesn't document a counts-to-µT conversion factor, so "
+          "no unit is given. Diagnostic-only.",
+          "MagX", kHeadingTimeoutSeconds));
   auto sk_mag_y_output = new SKOutputFloat(
       "sensors.hwt3100.magneticField.y", "/signalk/mag_y_path",
-      new SKMetadata("", "", "", "", kHeadingTimeoutSeconds));
+      new SKMetadata(
+          "", "Mag Y",
+          "Raw, uncalibrated magnetic field Y-axis reading from the "
+          "HWT3100 compass module, in sensor counts -- the manual "
+          "doesn't document a counts-to-µT conversion factor, so "
+          "no unit is given. Diagnostic-only.",
+          "MagY", kHeadingTimeoutSeconds));
   auto sk_mag_z_output = new SKOutputFloat(
       "sensors.hwt3100.magneticField.z", "/signalk/mag_z_path",
-      new SKMetadata("", "", "", "", kHeadingTimeoutSeconds));
+      new SKMetadata(
+          "", "Mag Z",
+          "Raw, uncalibrated magnetic field Z-axis reading from the "
+          "HWT3100 compass module, in sensor counts -- the manual "
+          "doesn't document a counts-to-µT conversion factor, so "
+          "no unit is given. Diagnostic-only.",
+          "MagZ", kHeadingTimeoutSeconds));
 
   // --- HWT3100 serial I/O, calibration offset, and dispatch to outputs ---
 
