@@ -10,6 +10,22 @@ All notable changes to this project are documented in this file.
 > everything since) as unverified against actual hardware until this
 > note is updated or removed.
 
+## [0.5.0] - 2026-08-18
+
+### Changed
+
+- Calibration actions (Start/End/Clear) are now real buttons on the web
+  UI's Control tab instead of checkboxes that had to be checked and
+  saved — clicking one fires the corresponding `AT+CALI` command
+  immediately. The module's plain-text reply ("Calibrating",
+  "Calibration completed", "Reset mag offset param") is now shown on
+  the Status page.
+- **Temporary**: depends on `BoatHacks/SensESP` (a fork) instead of
+  upstream `SignalK/SensESP`, since upstream's `UIButton` class has no
+  web UI wiring behind it (confirmed in 0.2.1/0.2.2). A fix has been
+  filed upstream as SignalK/SensESP#1061; this firmware will move back
+  to upstream once it merges.
+
 ## [0.4.0] - 2026-08-17
 
 ### Added
