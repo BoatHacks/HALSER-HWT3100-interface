@@ -405,18 +405,32 @@ parent firmware does for NMEA 0183 bit rate) for every SPEC §7 config
 value: N2K master enable, PGN 127250 enable, SignalK enable, calibration
 offset, WiFi/SignalK connection (SensESP's own built-in config UI).
 
-Calibration *commands* (§8.2/2.2) use the same mechanism, reframed as
-one-shot triggers: each is a `PersistingObservableValue<bool>` that,
-when set `true` (via the config UI), fires the corresponding
-`CalibrationCommandHandler` method and then immediately resets itself to
-`false` so it can be triggered again. Trade-off, accepted: if the device
-loses power between the `true` write and the `false` reset, the next
-boot's initial config-load emit could replay the command — acceptable
-because HWT3100 calibration commands are safe to resend, unlike
-`AT+MODE` (SPEC §1.2, §2). `gateway.cpp` constructs and owns the two
-`TaskQueueProducer`s (2.1) and the `SerialTerminal`/calibration-trigger
-config items; the actual command dispatch stays 2.2's responsibility, not
-this component's.
+Calibration *commands* (§8.2/2.2) are three `sensesp::UIButton`s
+("Start Calibration", "End Calibration", "Clear Calibration"),
+registered via `UIButton::add(...)->attach(...)`, each `attach()`ed
+lambda calling straight into the corresponding
+`CalibrationCommandHandler` method — no config item, no persisted
+state, since a click either fires immediately or (per SPEC §10) is
+lost, and HWT3100 calibration commands are safe to resend regardless
+(unlike `AT+MODE`, SPEC §1.2, §2). This depends on `BoatHacks/SensESP`
+(temporary `platformio.ini` pin, see the comment there) rather than
+upstream `SignalK/SensESP`, since upstream's `UIButton` has no backend
+wiring behind it as of this writing (`docs/plans/uibutton-investigation.md`);
+a PR fixing that upstream is filed but not yet merged.
+
+`UIButton`'s click contract has no return value, so `gateway.cpp` also
+wires a `StatusPageItem<String>` ("HWT3100 Calibration Reply") as a
+best-effort status display: a `LambdaConsumer` on the existing
+`raw_line_producer` (2.1) checks each incoming line with
+`halser::IsCalibrationReply()` (`hwt3100_calibration_reply.h/.cpp`) and,
+if it matches one of the three known `AT+CALI` reply strings, sets the
+status item to that line's text — same "reply rides the ordinary raw
+line stream, distinguished by known text" pattern §8.2b already uses
+for `AT+PRATE=?`. See `docs/plans/calibration-control-tab.md`.
+`gateway.cpp` constructs and owns the two `TaskQueueProducer`s (2.1),
+the `SerialTerminal`, and the calibration `UIButton`s/status item; the
+actual command dispatch stays 2.2's responsibility, not this
+component's.
 
 `MfdCalibrationBridge` (2.2a) is a second trigger source for the same
 2.2 handler, constructed once after it — no config item of its own

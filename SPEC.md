@@ -427,26 +427,37 @@ Requirements:
 
 The web UI exposes the HWT3100's own on-module magnetic-field calibration
 procedure as named actions for a fixed, known set of commands — not as
-free-text command entry. Implemented as three boolean config-toggle
-items (SensESP's config REST API has no "button" primitive — see §8.1's
-note on why this rides the config API rather than a dedicated UI
-control): setting one to true fires the corresponding command and it
-immediately resets itself to false. See ARCHITECTURE.md §2.6 for the
-mechanism and the accepted reboot-replay trade-off.
+free-text command entry. Implemented as three real `UIButton`s ("Start
+Calibration", "End Calibration", "Clear Calibration") on the web UI's
+Control tab, each wired straight to the corresponding
+`CalibrationCommandHandler` method. See ARCHITECTURE.md §2.6 for the
+mechanism.
 
-SensESP's `UIButton` class (documented as creating a real button in the
-web UI's "Control" tab) was investigated as a nicer alternative to the
-check-a-box-then-Save mechanic, since that flow reads as confusing —
-checking a box looks like changing a persistent setting, not firing a
-one-shot action. It's not usable: neither the vendored SensESP version
-this project pins nor the current upstream `main` branch has any
-server-side HTTP handler that serves or consumes `UIButton`'s registry
-— the class exists, but nothing on the backend wires it to the web UI.
-Given that, the three items keep the config-toggle mechanism, with
-titles (`Calibration 1/3: Start` etc.) and identically-worded
-descriptions making the "check + Save, then it un-checks itself"
-behavior explicit on all three rather than assuming it's obvious from
-the first one alone.
+This firmware previously implemented these as three boolean
+config-toggle items (check a box, Save, it un-checks itself), because
+the SensESP version this project pinned had a `UIButton` class with no
+backend/frontend wiring behind it — investigated and confirmed
+non-functional both by static analysis and on real hardware (see
+`docs/plans/uibutton-investigation.md`). That gap has since been fixed
+upstream (a PR against `SignalK/SensESP` adds a `/api/buttons` handler
+and a Control-tab page); until it merges, this project temporarily
+depends on `BoatHacks/SensESP` (see the `platformio.ini` comment) to get
+working buttons now rather than waiting.
+
+`UIButton` is fire-and-forget — clicking one fires an HTTP request and
+notifies the button's observer, with no return-value/response
+mechanism. To still give the user some feedback on what actually
+happened, the HWT3100's own plain-text reply to each `AT+CALI` command
+("Calibrating", "Calibration completed", "Reset mag offset param") is
+shown on the Status page as a `StatusPageItem` ("HWT3100 Calibration
+Reply"), updated whenever one of those three known reply strings is
+seen on the raw serial line stream (same mechanism as §8.2b's
+`AT+PRATE=?` reply parsing) — see `docs/plans/calibration-control-tab.md`.
+This is a best-effort correlation, not a strict request/response: it
+shows the module's last calibration-reply line, not necessarily the
+reply to the specific click that most recently happened, and a
+synchronous "click → response shown inline" UI would need further
+upstream SensESP changes this project doesn't have yet.
 
 The full set of relevant commands, from the HWT3100-TTL/232 manual §5.3.1
 (all plain ASCII text, terminated `\r\n`, all operate without leaving

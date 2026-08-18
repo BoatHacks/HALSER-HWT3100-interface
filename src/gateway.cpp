@@ -7,6 +7,7 @@
 #include "calibration_offset.h"
 #include "halser_const.h"
 #include "hwt3100_calibration_commands.h"
+#include "hwt3100_calibration_reply.h"
 #include "hwt3100_prate_command.h"
 #include "hwt3100_serial.h"
 #include "hwt3100_types.h"
@@ -21,6 +22,8 @@
 #include "sensesp/system/observablevalue.h"
 #include "sensesp/system/task_queue_producer.h"
 #include "sensesp/ui/config_item.h"
+#include "sensesp/ui/status_page_item.h"
+#include "sensesp/ui/ui_button.h"
 #include "sensesp_app_builder.h"
 #include "serial_terminal.h"
 
@@ -80,20 +83,6 @@ static uint32_t GetBoardSerialNumber() {
   uint8_t mac[6];
   esp_efuse_mac_get_default(mac);
   return (mac[3] << 16) | (mac[4] << 8) | mac[5];
-}
-
-/// Wires a PersistingObservableValue<bool> up as a one-shot "trigger":
-/// setting it true fires `action`, then it resets itself to false so it
-/// can be triggered again. See docs/plans/gateway-wiring.md for the
-/// reboot-replay trade-off this pattern accepts.
-void WireCalibrationTrigger(std::shared_ptr<PersistingObservableValue<bool>> trigger,
-                             std::function<void()> action) {
-  trigger->connect_to(new LambdaConsumer<bool>([trigger, action](bool value) {
-    if (value) {
-      action();
-      trigger->set(false);
-    }
-  }));
 }
 
 }  // namespace
@@ -425,6 +414,26 @@ void run_hwt3100_gateway() {
         }
       }));
 
+  // Calibration command reply handling (SPEC.md §8.2): shows the
+  // module's own plain-text reply ("Calibrating" etc.) on the Status
+  // page after a Control-tab button fires the corresponding AT+CALI
+  // command, so the user gets some indication of what actually
+  // happened rather than a purely fire-and-forget button (§10 Design
+  // Decisions — full synchronous request/response isn't available
+  // without further upstream SensESP changes; see
+  // docs/plans/calibration-control-tab.md). Like the AT+PRATE reply
+  // above, this rides the same raw-line stream as ordinary heading
+  // data — IsCalibrationReply() picks out only the three known reply
+  // strings.
+  auto calibration_status = std::make_shared<StatusPageItem<String>>(
+      "HWT3100 Calibration Reply", "(none yet)", "HWT3100", 30);
+  raw_line_producer->connect_to(new LambdaConsumer<HWT3100RawLine>(
+      [calibration_status](HWT3100RawLine line) {
+        if (halser::IsCalibrationReply(line.text)) {
+          calibration_status->set(String(line.text));
+        }
+      }));
+
   auto rate_of_turn_estimator = new halser::RateOfTurnEstimator(
       kRateOfTurnWindowMs, kRateOfTurnMinSpanMs);
 
@@ -579,56 +588,23 @@ void run_hwt3100_gateway() {
   // its tMsgHandler base constructor, same as MfdCalibrationBridge.
   new halser::MagneticVariationListener(nmea2000, &heading_sender->variation_);
 
-  // Three adjacent, consistently-worded actions (SPEC.md §8.2): each is
-  // a one-shot trigger, not a persistent setting — SensESP's config UI
-  // has no "button" primitive, so the mechanism is check-the-box, save,
-  // and it flips back to unchecked once the command fires (§10 Design
-  // Decisions covers the reboot-replay trade-off this accepts). The
-  // "1/2/3" title prefix and matching sort_order keep the three
-  // together and in the order you'd actually use them, and every
-  // description spells out the same "check + save, then it un-checks
-  // itself" mechanic so it reads the same way three times in a row
-  // rather than leaving it to be inferred from just the first one.
-  auto start_calibration = std::make_shared<PersistingObservableValue<bool>>(
-      false, "/hwt3100/calibration/start");
-  ConfigItem(start_calibration)
-      ->set_title("Calibration 1/3: Start")
-      ->set_description(
-          "One-shot action, not a setting: check the box and Save to send "
-          "AT+CALI=1 and begin calibration; it un-checks itself once sent. "
-          "Rotate the module through 2-3 full turns after starting.")
-      ->set_sort_order(20)
-      ->set_config_schema(
-          R"schema({"type":"object","properties":{"value":{"title":"Send AT+CALI=1","type":"boolean"}}})schema");
-  WireCalibrationTrigger(start_calibration,
-                         [calibration_commands]() { calibration_commands->StartCalibration(); });
+  // Three adjacent, consistently-worded actions (SPEC.md §8.2), now
+  // real UIButtons on the web UI's Control tab (BoatHacks/SensESP;
+  // see the platformio.ini comment and docs/plans/calibration-control-tab.md
+  // — temporary until the upstream PR lands). must_confirm is left at
+  // its default (true) for all three: each one changes the module's
+  // on-module magnetic calibration state, which is annoying to redo if
+  // clicked by accident. Fire-and-forget by design — UIButton has no
+  // return-value mechanism — so calibration_status (above) is what
+  // shows whether/what the module actually replied.
+  sensesp::UIButton::add("hwt3100_calibration_start", "Start Calibration")
+      ->attach([calibration_commands]() { calibration_commands->StartCalibration(); });
 
-  auto end_calibration = std::make_shared<PersistingObservableValue<bool>>(
-      false, "/hwt3100/calibration/end");
-  ConfigItem(end_calibration)
-      ->set_title("Calibration 2/3: End")
-      ->set_description(
-          "One-shot action, not a setting: check the box and Save to send "
-          "AT+CALI=0 and finish calibration; it un-checks itself once sent.")
-      ->set_sort_order(21)
-      ->set_config_schema(
-          R"schema({"type":"object","properties":{"value":{"title":"Send AT+CALI=0","type":"boolean"}}})schema");
-  WireCalibrationTrigger(end_calibration,
-                         [calibration_commands]() { calibration_commands->EndCalibration(); });
+  sensesp::UIButton::add("hwt3100_calibration_end", "End Calibration")
+      ->attach([calibration_commands]() { calibration_commands->EndCalibration(); });
 
-  auto clear_calibration = std::make_shared<PersistingObservableValue<bool>>(
-      false, "/hwt3100/calibration/clear");
-  ConfigItem(clear_calibration)
-      ->set_title("Calibration 3/3: Clear")
-      ->set_description(
-          "One-shot action, not a setting: check the box and Save to send "
-          "AT+CALI=2 and reset the module's magnetic offset; it un-checks "
-          "itself once sent.")
-      ->set_sort_order(22)
-      ->set_config_schema(
-          R"schema({"type":"object","properties":{"value":{"title":"Send AT+CALI=2","type":"boolean"}}})schema");
-  WireCalibrationTrigger(clear_calibration,
-                         [calibration_commands]() { calibration_commands->ClearCalibration(); });
+  sensesp::UIButton::add("hwt3100_calibration_clear", "Clear Calibration")
+      ->attach([calibration_commands]() { calibration_commands->ClearCalibration(); });
 
   while (true) {
     event_loop()->tick();
