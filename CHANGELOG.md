@@ -10,6 +10,17 @@ All notable changes to this project are documented in this file.
 > everything since) as unverified against actual hardware until this
 > note is updated or removed.
 
+## [0.5.2] - 2026-08-18
+
+### Fixed
+
+- `sensors.hwt3100.magneticField.x/y/z` now carry proper SignalK
+  metadata (`display_name`, `description`, `short_name`) instead of
+  being published fully empty — SignalK requires a `description` on
+  any non-standard path. `units` is still intentionally left empty,
+  since the HWT3100 manual doesn't document a counts-to-µT conversion
+  factor.
+
 ## [0.5.1] - 2026-08-18
 
 ### Fixed
