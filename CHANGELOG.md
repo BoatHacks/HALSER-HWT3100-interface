@@ -10,6 +10,22 @@ All notable changes to this project are documented in this file.
 > everything since) as unverified against actual hardware until this
 > note is updated or removed.
 
+## [0.5.1] - 2026-08-18
+
+### Fixed
+
+- Control tab calibration buttons now actually display in Start, Stop,
+  Clear order — `UIButton`'s registry is keyed alphabetically by name,
+  so they were previously rendering as Clear, Stop, Start regardless
+  of registration order. ("End Calibration" is now labeled "Stop
+  Calibration" to match.)
+
+### Added
+
+- The Start Calibration button's title now states the procedure
+  itself: rotate the module 360° at least three times, then press
+  Stop.
+
 ## [0.5.0] - 2026-08-18
 
 ### Changed
