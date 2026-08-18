@@ -597,13 +597,27 @@ void run_hwt3100_gateway() {
   // clicked by accident. Fire-and-forget by design — UIButton has no
   // return-value mechanism — so calibration_status (above) is what
   // shows whether/what the module actually replied.
-  sensesp::UIButton::add("hwt3100_calibration_start", "Start Calibration")
+  //
+  // The Control tab renders buttons in UIButton::get_ui_buttons()'s
+  // std::map key order, i.e. sorted by the `name` argument below, not
+  // registration order — the "1_"/"2_"/"3_" prefixes are what actually
+  // pin the displayed order to Start, Stop, Clear.
+  //
+  // The Start button's title carries the calibration procedure itself
+  // (rotate, then Stop) — UIButton has no separate description field
+  // (see docs/plans/calibration-control-tab.md), and the title is the
+  // only per-button text the Control tab currently renders, so this is
+  // the only channel available for it without another round of
+  // BoatHacks/SensESP changes.
+  sensesp::UIButton::add(
+      "hwt3100_calibration_1_start",
+      "Start Calibration (rotate 360° at least 3x, then press Stop)")
       ->attach([calibration_commands]() { calibration_commands->StartCalibration(); });
 
-  sensesp::UIButton::add("hwt3100_calibration_end", "End Calibration")
+  sensesp::UIButton::add("hwt3100_calibration_2_stop", "Stop Calibration")
       ->attach([calibration_commands]() { calibration_commands->EndCalibration(); });
 
-  sensesp::UIButton::add("hwt3100_calibration_clear", "Clear Calibration")
+  sensesp::UIButton::add("hwt3100_calibration_3_clear", "Clear Calibration")
       ->attach([calibration_commands]() { calibration_commands->ClearCalibration(); });
 
   while (true) {

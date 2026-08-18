@@ -427,11 +427,13 @@ Requirements:
 
 The web UI exposes the HWT3100's own on-module magnetic-field calibration
 procedure as named actions for a fixed, known set of commands — not as
-free-text command entry. Implemented as three real `UIButton`s ("Start
-Calibration", "End Calibration", "Clear Calibration") on the web UI's
-Control tab, each wired straight to the corresponding
-`CalibrationCommandHandler` method. See ARCHITECTURE.md §2.6 for the
-mechanism.
+free-text command entry. Implemented as three real `UIButton`s, shown in this order on the web
+UI's Control tab: "Start Calibration" (title also carries the
+procedure itself — rotate the module 360° at least three times, then
+press Stop — since `UIButton` has no separate description field),
+"Stop Calibration", "Clear Calibration" — each wired straight to the
+corresponding `CalibrationCommandHandler` method. See ARCHITECTURE.md
+§2.6 for the mechanism.
 
 This firmware previously implemented these as three boolean
 config-toggle items (check a box, Save, it un-checks itself), because

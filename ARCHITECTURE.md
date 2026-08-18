@@ -406,13 +406,17 @@ value: N2K master enable, PGN 127250 enable, SignalK enable, calibration
 offset, WiFi/SignalK connection (SensESP's own built-in config UI).
 
 Calibration *commands* (§8.2/2.2) are three `sensesp::UIButton`s
-("Start Calibration", "End Calibration", "Clear Calibration"),
+("Start Calibration", "Stop Calibration", "Clear Calibration"),
 registered via `UIButton::add(...)->attach(...)`, each `attach()`ed
 lambda calling straight into the corresponding
 `CalibrationCommandHandler` method — no config item, no persisted
 state, since a click either fires immediately or (per SPEC §10) is
 lost, and HWT3100 calibration commands are safe to resend regardless
-(unlike `AT+MODE`, SPEC §1.2, §2). This depends on `BoatHacks/SensESP`
+(unlike `AT+MODE`, SPEC §1.2, §2). The Control tab renders buttons in
+`UIButton::get_ui_buttons()`'s `std::map` key order (alphabetical by
+the `name` argument, not registration order), so the three names carry
+`1_`/`2_`/`3_` prefixes (`hwt3100_calibration_1_start` etc.) purely to
+pin the displayed order to Start, Stop, Clear. This depends on `BoatHacks/SensESP`
 (temporary `platformio.ini` pin, see the comment there) rather than
 upstream `SignalK/SensESP`, since upstream's `UIButton` has no backend
 wiring behind it as of this writing (`docs/plans/uibutton-investigation.md`);

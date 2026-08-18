@@ -25,13 +25,29 @@ yet merged.
    includes the fix).
 
 2. **Replace the three config-toggle checkboxes with real `UIButton`s.**
-   `sensesp::UIButton::add("hwt3100_calibration_start", "Start
+   `sensesp::UIButton::add("hwt3100_calibration_1_start", "Start
    Calibration")->attach(...)` etc., each lambda calling straight into
    the existing `CalibrationCommandHandler` (unchanged — `StartCalibration()`
    / `EndCalibration()` / `ClearCalibration()`). No persisted state,
    no config item: a click either fires the command or (if missed) is
    simply not fired — nothing to replay on the next boot, unlike the
    old `PersistingObservableValue<bool>` trigger pattern.
+
+   The Control tab renders buttons in `UIButton::get_ui_buttons()`'s
+   `std::map` iteration order, which is sorted by the `name` argument,
+   not registration order or title. Plain names ("...start",
+   "...end", "...clear") sorted alphabetically to Clear, End, Start —
+   the opposite of the intended reading order — so the names carry
+   `1_`/`2_`/`3_` prefixes purely to force the displayed order to
+   Start, Stop, Clear.
+
+   `UIButton` has no separate description field, and the Control
+   page's `ButtonCard` only renders `title` (as both the card header
+   and the button's own label) — no other per-button text channel
+   exists without extending `BoatHacks/SensESP` again. So the Start
+   button's calibration procedure ("rotate 360° at least three times,
+   then press Stop") is folded into its `title` string rather than
+   shown as a separate description.
    `must_confirm` is left at its default (`true`) for all three, since
    each changes the module's on-module calibration state and is
    annoying to redo if clicked by accident.
