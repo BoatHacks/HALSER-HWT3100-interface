@@ -97,6 +97,7 @@ void run_hwt3100_gateway() {
                           ->set_hostname("halser-hwt3100")
                           ->set_button_pin(kButtonPin)
                           ->enable_ota("halser-hwt3100")
+                          ->enable_system_info_sensors()
                           ->get_app();
 
   // No separate RGB LED use here — SensESP's own RGBSystemStatusLed

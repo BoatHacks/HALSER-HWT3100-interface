@@ -10,6 +10,15 @@ All notable changes to this project are documented in this file.
 > everything since) as unverified against actual hardware until this
 > note is updated or removed.
 
+## [0.5.3] - 2026-08-19
+
+### Added
+
+- System health info (event loop rate, free memory, uptime, IP address,
+  WiFi signal level) is now published to SignalK under
+  `sensors.halser-hwt3100.*`, via SensESP's built-in
+  `enable_system_info_sensors()`.
+
 ## [0.5.2] - 2026-08-18
 
 ### Fixed

@@ -60,6 +60,13 @@ allowlisted write path — see ARCHITECTURE.md §2.1, §2.2, §6.
   `hwt3100_serial.h/.cpp`, `hwt3100_calibration_commands.h/.cpp`,
   `calibration_offset.h`, `n2k_senders.h`, `serial_terminal.h/.cpp`
 
+### System Health Reporting
+
+`gateway.cpp` calls `SensESPAppBuilder::enable_system_info_sensors()`,
+which publishes SensESP's built-in system-health sensors to SignalK under
+`sensors.halser-hwt3100.*`: `systemHz` (event loop rate), `freeMemory`,
+`uptime`, `ipAddress`, and `wifiSignalLevel`.
+
 ### Hardware Pin Assignments
 
 | Pin | Function |
