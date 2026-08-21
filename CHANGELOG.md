@@ -2,13 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
-> **⚠️ Last version verified on real hardware: 0.2.2.** Everything from
-> 0.3.0 onward has been built and unit-tested (`pio run -e halser`,
-> `pio test -e native`) but not yet flashed to a real HWT3100 + HALSER
-> board. Treat 0.3.0+ features (UART auto-detection/switching, bus-
-> sourced magnetic variation, tunable rate-of-turn config, and
-> everything since) as unverified against actual hardware until this
-> note is updated or removed.
+> **⚠️ Last version verified on real hardware: 0.5.5.** Confirmed
+> working end-to-end on a real HWT3100-TTL + HALSER board: heading
+> parsing (post the 0.5.5 fix), N2K/SignalK output. Power wiring
+> confirmed too — the module's GND/VCC connect to the N2K bus's own
+> GND/12V, no separate supply needed (SPEC.md §4). Features added
+> between 0.2.2 and 0.5.5 (UART auto-detection/switching, bus-sourced
+> magnetic variation, tunable rate-of-turn config, calibration
+> buttons, system health reporting) have not been individually
+> re-verified against hardware beyond this confirmation that the
+> firmware as a whole now works.
 
 ## [0.5.5] - 2026-08-21
 

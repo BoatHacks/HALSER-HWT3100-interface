@@ -563,9 +563,11 @@ Same as the parent firmware (see its AGENTS.md), plus one addition:
   UART peripheral muxed by that jumper
   across NMEA0183/RS-232/UART connectors). Protocol confirmed from the
   vendor manual + SDK: ASCII mode, comma-delimited text lines for data,
-  `AT+`-prefixed text commands for calibration (SPEC §1.2). Exact parsing
-  edge cases remain an open question for implementation-time hardware
-  testing (SPEC §11).
+  `AT+`-prefixed text commands for calibration (SPEC §1.2).
+
+  **Power**: the module's GND and VCC leads connect to the N2K bus's
+  own GND and 12V, not to a separate supply — confirmed on real
+  hardware (SPEC §11).
 - **NMEA 2000 bus** — via `tNMEA2000_esp32`, GPIO4 TX / GPIO5 RX (TWAI),
   same transport as the parent firmware; device identity presented on
   the bus is the B&G Precision-9 clone (§1, §4), not a HALSER identity.

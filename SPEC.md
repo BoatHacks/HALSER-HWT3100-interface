@@ -217,7 +217,9 @@ available," same as any other not-yet-valid reading (§6).
   jumper on "U" — confirmed against Hat Labs' HALSER hardware docs; see
   ARCHITECTURE.md §5). 115200 bps, requiring the module to be
   pre-configured via `AT+UART=1` before wiring (§1.2) — not the
-  module's factory-default 9600.
+  module's factory-default 9600. **Power**: the module's GND and VCC
+  leads connect to the N2K bus's own GND and 12V, confirmed on real
+  hardware — no separate power supply needed.
 - There is no secondary/fallback sensor. If the HWT3100 stops sending
   data, the firmware does not substitute another source — it marks the
   data stale (see §6).
@@ -860,13 +862,6 @@ SignalK output, baud-rate auto-detection) are now implemented; see
   in this exact shape all rest entirely on one third-party reference
   implementation's reverse-engineering. Needs real-hardware testing
   before relying on this operationally.
-- Exact field ordering/formatting edge cases in the HWT3100's ASCII
-  output line (negative-number formatting, whether the module always
-  sends all four fields in the same order, behavior at start-up before
-  the first full line arrives) — the format is confirmed at a high level
-  from the manual + vendor SDK, but real-hardware testing during
-  implementation should verify parsing handles the actual byte stream
-  correctly.
 - Whether `AT+CALI=0` (end calibration) also persists/saves the result,
   or whether a separate save step exists — the manual doesn't explicitly
   say persistence is automatic. Needs confirming during implementation
@@ -899,3 +894,14 @@ no active notification, no LED — SensESP already owns the only RGB LED
 with no sharing hook); a degrees/radians unit bug in both N2K and
 SignalK heading output, found and fixed while wiring up `meta.timeout`'s
 units field.
+
+Resolved against real hardware (post-implementation): the HWT3100's
+ASCII output line actually uses `Magx:<int>,Magy:<int>,Magz:<int>,Yaw:<float>`
+(colon-separated, full field names) — the format this document
+originally described (`Magx=<int>,y=<int>,z=<int>,w=<float>`, from the
+manual + vendor SDK example) never matched a real module's output at
+all, so `ParseHWT3100Line()` never successfully parsed real heading
+data until this was caught via the raw-line ESP_LOGD logging and fixed
+(§1.2, §4). The module's power wiring is also confirmed: GND and VCC
+connect to the N2K bus's own GND and 12V, not a separate supply (§4,
+ARCHITECTURE.md §5).
