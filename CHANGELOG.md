@@ -10,6 +10,21 @@ All notable changes to this project are documented in this file.
 > everything since) as unverified against actual hardware until this
 > note is updated or removed.
 
+## [0.5.5] - 2026-08-21
+
+### Fixed
+
+- **`ParseHWT3100Line()` never matched real HWT3100 output — heading
+  data has likely never actually parsed on real hardware.** The
+  format was based on the manual + vendor SDK example
+  (`Magx=<int>,y=<int>,z=<int>,w=<float>`) rather than a live device.
+  A real module's serial log, captured via the ESP_LOGD line logging
+  added in 0.5.4, shows the actual format uses `:` instead of `=` and
+  full field names: `Magx:<int>,Magy:<int>,Magz:<int>,Yaw:<float>`.
+  The parser, its tests, and every doc reference (SPEC.md,
+  ARCHITECTURE.md, AGENTS.md) are updated to match. Verified against
+  real log lines, including negative values on every field.
+
 ## [0.5.4] - 2026-08-19
 
 ### Added

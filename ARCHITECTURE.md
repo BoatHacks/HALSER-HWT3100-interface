@@ -14,7 +14,7 @@ HWT3100-TTL  ◄─────────────────────�
    │                                                       │
    │                                                       ▼
    │                                      HWT3100 ASCII line parser
-   │                              "Magx=<n>,y=<n>,z=<n>,w=<n.n>\r\n"
+   │                              "Magx:<n>,Magy:<n>,Magz:<n>,Yaw:<n.n>\r\n"
    │                                                       │
    │                                            HeadingReading (heading,
    │                                            magX/Y/Z, timestamp)
@@ -89,7 +89,7 @@ touches `Serial1` directly. Two directions, both gated:
   work on the main loop): accumulates bytes until `\r\n`, then hands the
   line to `ParseHWT3100Line()` — a pure function, in its own file
   (`hwt3100_parser.h/.cpp`) with no Arduino dependency, that parses
-  `Magx=<int>,y=<int>,z=<int>,w=<float>` into a `HeadingReading` (§3) and
+  `Magx:<int>,Magy:<int>,Magz:<int>,Yaw:<float>` into a `HeadingReading` (§3) and
   is unit-tested on the host (`pio test -e native`,
   docs/plans/hwt3100-serial-parser.md) rather than only against real
   hardware. `hwt3100_serial.h/.cpp` itself is just the thin hardware
@@ -544,7 +544,7 @@ Same as the parent firmware (see its AGENTS.md), plus one addition:
 | Framework | Arduino (ESP32-C3), SensESP 3.2.0 | Reused for consistency with the HALSER family; gets WiFi, web UI, SignalK client, OTA for free. |
 | N2K | ttlappalainen/NMEA2000-library + NMEA2000_twai | Same as parent; adapts the parent's `N2kHeadingSender`/`SetN2kPGN127250` and adds `SetN2kPGN127251` for rate of turn. |
 | N2K device identity | Cloned from `htool/ESP32_Precision-9_compass_CMPS14` | Presents as a B&G Precision-9 rather than a generic device — SPEC §1.2, §5.1, §10. Product info + device function/class + manufacturer code cloned verbatim; the "unique number" is deliberately not, to avoid N2K address-claim collisions between multiple installs. |
-| Serial parsing | Custom (this project) | Simple line-based ASCII parsing (`Magx=<n>,y=<n>,z=<n>,w=<n.n>\r\n`) — no library needed, comparable effort to the parent's NMEA 0183 sentence parsers but simpler (no checksum). |
+| Serial parsing | Custom (this project) | Simple line-based ASCII parsing (`Magx:<n>,Magy:<n>,Magz:<n>,Yaw:<n.n>\r\n`) — no library needed, comparable effort to the parent's NMEA 0183 sentence parsers but simpler (no checksum). |
 | Rate of turn | Custom (this project) | No library needed — a sliding-window derivative of heading readings is a small, self-contained computation (2.4a); no existing library targets "derive ROT from a compass with no gyroscope." |
 | Serial log transport | SensESP's existing config REST API (no new dependency) | SensESP's `HTTPServer` wraps ESP-IDF's native `esp_http_server`, not `ESPAsyncWebServer` as first assumed, and exposes no public hook for custom HTTP/WebSocket endpoints at all. Reusing the already-public config GET/PUT mechanism (§2.5) needed nothing new; a dedicated WebSocket endpoint would have needed a second, hand-rolled `esp_http_server` instance. |
 | RGB LED | Not used by this firmware's own code | SensESP auto-instantiates its own `RGBSystemStatusLed` on GPIO8 (from the `PIN_RGB_LED` build flag) with no exposed pause/share hook. `gateway.cpp` briefly ran a second, conflicting `Adafruit_NeoPixel` driver on the same pin (from the gateway-wiring change); removed once the conflict was found (§2.9, SPEC §10). |

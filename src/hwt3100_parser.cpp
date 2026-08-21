@@ -15,7 +15,8 @@ bool ParseHWT3100Line(const char* line, HeadingReading* out) {
   // which is fine since success is judged by field count, not by
   // consuming the whole line.
   int matched =
-      sscanf(line, " Magx=%d,y=%d,z=%d,w=%f", &mag_x, &mag_y, &mag_z, &heading);
+      sscanf(line, " Magx:%d,Magy:%d,Magz:%d,Yaw:%f", &mag_x, &mag_y, &mag_z,
+             &heading);
   if (matched != 4) return false;
 
   out->mag_x = mag_x;

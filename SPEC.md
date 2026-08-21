@@ -43,11 +43,16 @@ default), **Modbus**, and **Modbus active-output**. Verified against the
 manual and the vendor's own Arduino SDK example (`wit_c_sdk.c`):
 
 - In ASCII mode, the module continuously streams plain-text lines of the
-  form `Magx=<int>,y=<int>,z=<int>,w=<decimal>\r\n` — `x`/`y`/`z` are raw
-  magnetic field readings, `w` is heading in degrees (one decimal place).
-  This is confirmed by the vendor SDK's ASCII line parser, which looks
-  for exactly this comma-delimited format. **This alone is sufficient for
-  every data requirement this firmware has** — no Modbus needed.
+  form `Magx:<int>,Magy:<int>,Magz:<int>,Yaw:<decimal>\r\n` — `Magx`/
+  `Magy`/`Magz` are raw magnetic field readings, `Yaw` is heading in
+  degrees (one decimal place). Confirmed against a real HWT3100-TTL
+  module's actual serial output (via `hwt3100_serial.cpp`'s ESP_LOGD
+  line logging); an earlier revision of this section instead described
+  a differently-punctuated format (`Magx=<int>,y=<int>,z=<int>,w=<decimal>`)
+  sourced from the vendor SDK's ASCII parser (`wit_c_sdk.c`) rather than
+  a live device, which turned out not to match real hardware output at
+  all — see CHANGELOG.md. **This alone is sufficient for every data
+  requirement this firmware has** — no Modbus needed.
 - ASCII mode also accepts a documented set of `AT+`-prefixed text
   commands (§5.3.1 of the manual) for calibration and configuration —
   see §2 and §8.2 — without leaving ASCII mode.
@@ -397,8 +402,8 @@ per-output/per-PGN toggles — §7), the web UI includes:
 ### 8.1 Serial Terminal (Monitor)
 
 A small live serial terminal/monitor showing the raw data arriving from
-the HWT3100 over UART — the `Magx=...,y=...,z=...,w=...` text lines
-(§1.2). This is a diagnostic tool for the person installing/wiring the
+the HWT3100 over UART — the `Magx:...,Magy:...,Magz:...,Yaw:...` text
+lines (§1.2). This is a diagnostic tool for the person installing/wiring the
 module: it lets them confirm the sensor is actually sending data, at the
 expected baud rate, before trusting the parsed heading value — useful
 when tracking down wiring faults or a wrong baud rate.
@@ -519,7 +524,7 @@ not recommended.
 
 > **⚠️ `AT+PRATE=0` silences the module's continuous ASCII stream.**
 > This firmware's entire read pipeline (§2, ARCHITECTURE §2.1) is
-> built around parsing unsolicited `Magx=...` lines as they arrive —
+> built around parsing unsolicited `Magx:...` lines as they arrive —
 > there is no request/response polling implemented anywhere. Setting
 > the rate to `0` via config does not crash anything, but it does stop
 > all heading data from ever arriving again until the rate is changed

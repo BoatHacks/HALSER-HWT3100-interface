@@ -28,7 +28,7 @@ uint16_t FormatPrateCommand(int value, char* buf, size_t buf_len);
 // AT+PRATE=?, per the manual's query-reply convention shared with
 // AT+MODE=?/AT+ID=?). Returns true and fills *out on success; returns
 // false and leaves *out untouched otherwise (e.g. an ordinary
-// "Magx=...,w=..." data line, which is the overwhelming majority of
+// "Magx:...,Yaw:..." data line, which is the overwhelming majority of
 // what arrives on this same serial stream).
 bool ParsePrateReply(const char* line, int* out);
 

@@ -40,7 +40,7 @@ See ARCHITECTURE.md for the full component breakdown. Summary:
 
 ```
 UART1 (9600 baud default, GPIO 3 RX)
-  → HWT3100 ASCII line parser ("Magx=<n>,y=<n>,z=<n>,w=<n.n>\r\n")
+  → HWT3100 ASCII line parser ("Magx:<n>,Magy:<n>,Magz:<n>,Yaw:<n.n>\r\n")
   → HeadingReading (heading, magX/Y/Z, timestamp)
   → Calibration offset applied
   → N2K sender (PGN 127250 only) + SignalK delta sender, independently

@@ -29,7 +29,7 @@ static void test_rejects_ordinary_data_line(void) {
   // The overwhelming majority of lines on this stream are heading data,
   // not command replies - these must not be misparsed as a calibration
   // reply.
-  TEST_ASSERT_FALSE(IsCalibrationReply("Magx=1,y=2,z=3,w=4.5"));
+  TEST_ASSERT_FALSE(IsCalibrationReply("Magx:1,Magy:2,Magz:3,Yaw:4.5"));
 }
 
 static void test_rejects_partial_match(void) {
