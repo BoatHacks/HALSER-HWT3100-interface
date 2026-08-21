@@ -1,6 +1,7 @@
 #include "hwt3100_serial.h"
 
 #include <Arduino.h>
+#include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -14,6 +15,14 @@
 namespace halser {
 
 namespace {
+
+// ESP_LOGD output is both written to the USB serial console and
+// captured into SensESP's in-memory LogBuffer, which the admin web UI's
+// Server Log page polls -- so logging every line here (SPEC.md doesn't
+// ask for it, but it's invaluable for diagnosing a misbehaving/
+// miswired HWT3100 without physically re-wiring a scope onto GPIO 3)
+// makes every line the module sends visible in both places for free.
+constexpr const char* kSerialLogTag = "hwt3100_serial";
 
 // AT command text for each HWT3100Command value (SPEC.md §8.2). All
 // terminated \r\n per the HWT3100-TTL/232 manual ("All AT commands end
@@ -162,6 +171,8 @@ void HWT3100SerialIO::ReadTaskLoop() {
 
       if (c == '\n') {
         line_buffer_[line_length_] = '\0';
+
+        ESP_LOGD(kSerialLogTag, "%s", line_buffer_);
 
         HeadingReading reading;
         if (ParseHWT3100Line(line_buffer_, &reading)) {

@@ -10,6 +10,17 @@ All notable changes to this project are documented in this file.
 > everything since) as unverified against actual hardware until this
 > note is updated or removed.
 
+## [0.5.4] - 2026-08-19
+
+### Added
+
+- Every line received from the HWT3100 over UART1 is now logged via
+  `ESP_LOGD` (tag `hwt3100_serial`) as it arrives, in
+  `HWT3100SerialIO::ReadTaskLoop()`. SensESP's `LogBuffer` writes this
+  both to the USB serial console and to the admin web UI's Server Log
+  page, useful for diagnosing a misbehaving/miswired module without
+  hooking a scope onto GPIO 3.
+
 ## [0.5.3] - 2026-08-19
 
 ### Added
