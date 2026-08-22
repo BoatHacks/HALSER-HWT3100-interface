@@ -247,6 +247,11 @@ calibration procedure via serial commands. The two are related in purpose
 (both about getting accurate heading out of the module) but don't share
 code — one never touches the serial link, the other only does.
 
+Also converts the module's raw `Yaw` axis convention (counterclockwise-
+positive, confirmed on real hardware) into a compass bearing
+(clockwise-positive, N2K/SignalK's convention) by negating before
+applying the offset — SPEC §1.2, §11.
+
 ### 2.4 N2K Senders (`n2k_senders.h`)
 
 - `N2kHeadingSender` — PGN 127250, adapted from the parent firmware's

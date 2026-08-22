@@ -53,6 +53,14 @@ manual and the vendor's own Arduino SDK example (`wit_c_sdk.c`):
   a live device, which turned out not to match real hardware output at
   all — see CHANGELOG.md. **This alone is sufficient for every data
   requirement this firmware has** — no Modbus needed.
+
+  > **⚠️ `Yaw`'s sign convention is counterclockwise-positive, not
+  > compass-positive.** Confirmed on real hardware: turning the module
+  > toward west from north *increased* `Yaw`, the opposite of the
+  > clockwise-positive convention N2K/SignalK compass headings require
+  > (N=0°, E=90°, S=180°, W=270°). `ApplyCalibrationOffset()`
+  > (`calibration_offset.h`) negates the raw value before applying the
+  > configured offset to correct this — see §11.
 - ASCII mode also accepts a documented set of `AT+`-prefixed text
   commands (§5.3.1 of the manual) for calibration and configuration —
   see §2 and §8.2 — without leaving ASCII mode.
@@ -905,3 +913,13 @@ data until this was caught via the raw-line ESP_LOGD logging and fixed
 (§1.2, §4). The module's power wiring is also confirmed: GND and VCC
 connect to the N2K bus's own GND and 12V, not a separate supply (§4,
 ARCHITECTURE.md §5).
+
+Also resolved against real hardware: raw `Yaw`'s sign convention is
+counterclockwise-positive, opposite of N2K/SignalK's clockwise-positive
+compass convention — turning the module toward west increased `Yaw`
+instead of decreasing it. `ApplyCalibrationOffset()` now negates the
+raw value before applying the offset (§1.2). This also fixes
+`navigation.rateOfTurn`/PGN 127251's sign, which fed from the same
+(previously wrong-direction) heading value: an actual starboard turn
+was producing a negative rate of turn, the opposite of the documented
+"positive = starboard" convention (§5.1, §5.2), until this fix.

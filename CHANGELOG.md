@@ -4,14 +4,35 @@ All notable changes to this project are documented in this file.
 
 > **⚠️ Last version verified on real hardware: 0.5.5.** Confirmed
 > working end-to-end on a real HWT3100-TTL + HALSER board: heading
-> parsing (post the 0.5.5 fix), N2K/SignalK output. Power wiring
-> confirmed too — the module's GND/VCC connect to the N2K bus's own
-> GND/12V, no separate supply needed (SPEC.md §4). Features added
-> between 0.2.2 and 0.5.5 (UART auto-detection/switching, bus-sourced
-> magnetic variation, tunable rate-of-turn config, calibration
-> buttons, system health reporting) have not been individually
-> re-verified against hardware beyond this confirmation that the
-> firmware as a whole now works.
+> parsing, N2K/SignalK output. Power wiring confirmed too — the
+> module's GND/VCC connect to the N2K bus's own GND/12V, no separate
+> supply needed (SPEC.md §4). **0.5.6 fixes a reversed compass
+> direction found on that same real hardware** (see below) but the fix
+> itself is not yet reflashed/reconfirmed. Features added between
+> 0.2.2 and 0.5.5 (UART auto-detection/switching, bus-sourced magnetic
+> variation, tunable rate-of-turn config, calibration buttons, system
+> health reporting) have not been individually re-verified against
+> hardware beyond this confirmation that the firmware as a whole now
+> works.
+
+## [0.5.6] - 2026-08-21
+
+### Fixed
+
+- **Compass direction was reversed: turning the module toward west
+  increased the reported heading instead of decreasing it.** The
+  HWT3100's raw `Yaw` field turned out to be counterclockwise-positive
+  (a common convention for IMU/AHRS Euler-angle output), the opposite
+  of N2K/SignalK's clockwise-positive compass convention (N=0°, E=90°,
+  S=180°, W=270°). `ApplyCalibrationOffset()` (`calibration_offset.h`)
+  now negates the raw value before applying the configured offset.
+  North still reads 0° (negating zero is a no-op) — only the turn
+  direction was wrong. This also fixes `navigation.rateOfTurn`/PGN
+  127251's sign, which derives from the same heading value: an actual
+  starboard turn was previously producing a *negative* rate of turn,
+  the opposite of the documented "positive = starboard" convention.
+  Added unit test coverage for `ApplyCalibrationOffset()`, previously
+  untested.
 
 ## [0.5.5] - 2026-08-21
 
